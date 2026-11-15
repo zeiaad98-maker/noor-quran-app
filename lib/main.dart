@@ -1,6 +1,6 @@
-import 'package:material_ui/material_ui.dart';
-import 'package:cupertino_ui/cupertino_ui.dart';
-import 'package:flutter_localizations/flutter_localizations.dart' show GlobalWidgetsLocalizations;
+import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'screens/surah_list_screen.dart';
 
 void main() {
   runApp(const NoorQuranApp());
@@ -52,7 +52,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _selectedIndex = 0;
 
   final List<Widget> _pages = const [
-    _PlaceholderTab(title: 'المصحف الشريف', icon: Icons.menu_book_rounded, subtitle: 'جاهز لاستقبال قاعدة البيانات العثمانية في المرحلة الثانية'),
+    SurahListScreen(),
     _PlaceholderTab(title: 'مواقيت الصلاة', icon: Icons.access_time_filled_rounded, subtitle: 'جاهز لربط الحساب الفلكي والأذان في المرحلة الرابعة'),
     _PlaceholderTab(title: 'اتجاه القبلة', icon: Icons.explore_rounded, subtitle: 'جاهز لربط مستشعر البوصلة في المرحلة الخامسة'),
     _PlaceholderTab(title: 'الأذكار والتسبيح', icon: Icons.favorite_rounded, subtitle: 'جاهز لربط حصن المسلم في المرحلة الخامسة'),
