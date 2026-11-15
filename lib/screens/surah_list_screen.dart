@@ -1,0 +1,109 @@
+import 'package:flutter/material.dart';
+import 'package:quran/quran.dart' as quran;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'surah_reader_screen.dart';
+
+class SurahListScreen extends StatefulWidget {
+  const SurahListScreen({super.key});
+
+  @override
+  State<SurahListScreen> createState() => _SurahListScreenState();
+}
+
+class _SurahListScreenState extends State<SurahListScreen> {
+  String _searchQuery = '';
+  int? _lastSurah;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLastRead();
+  }
+
+  Future<void> _loadLastRead() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _lastSurah = prefs.getInt('last_surah');
+    });
+  }
+
+  void _openSurah(int surahNumber) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SurahReaderScreen(surahNumber: surahNumber),
+      ),
+    );
+    _loadLastRead();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final allSurahs = List.generate(114, (index) => index + 1);
+    final filteredSurahs = allSurahs.where((surahNum) {
+      if (_searchQuery.isEmpty) return true;
+      final nameAr = quran.getSurahNameArabic(surahNum);
+      return nameAr.contains(_searchQuery) || surahNum.toString() == _searchQuery;
+    }).toList();
+
+    return Column(
+      children: [
+        if (_lastSurah != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Card(
+              color: Theme.of(context).colorScheme.primaryContainer,
+              child: ListTile(
+                leading: Icon(Icons.bookmark_rounded, color: Theme.of(context).colorScheme.primary),
+                title: const Text('متابعة القراءة', style: TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: Text('سورة ${quran.getSurahNameArabic(_lastSurah!)}'),
+                trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
+                onTap: () => _openSurah(_lastSurah!),
+              ),
+            ),
+          ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: TextField(
+            decoration: InputDecoration(
+              hintText: 'ابحث باسم السورة أو رقمها...',
+              prefixIcon: const Icon(Icons.search_rounded),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+            ),
+            onChanged: (val) => setState(() => _searchQuery = val.trim()),
+          ),
+        ),
+        Expanded(
+          child: ListView.separated(
+            itemCount: filteredSurahs.length,
+            separatorBuilder: (_, __) => const Divider(height: 1, indent: 72),
+            itemBuilder: (context, index) {
+              final surahNum = filteredSurahs[index];
+              final nameAr = quran.getSurahNameArabic(surahNum);
+              final verseCount = quran.getVerseCount(surahNum);
+              final place = quran.getPlaceOfRevelation(surahNum) == 'Makkah' ? 'مكية' : 'مدنية';
+
+              return ListTile(
+                leading: CircleAvatar(
+                  backgroundColor: Theme.of(context).colorScheme.primary.withOpacity(0.15),
+                  child: Text(
+                    '$surahNum',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.primary,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                title: Text('سورة $nameAr', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
+                subtitle: Text('$place • $verseCount آية'),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () => _openSurah(surahNum),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
