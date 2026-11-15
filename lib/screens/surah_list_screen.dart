@@ -13,6 +13,7 @@ class SurahListScreen extends StatefulWidget {
 class _SurahListScreenState extends State<SurahListScreen> {
   String _searchQuery = '';
   int? _lastSurah;
+  int? _lastPage;
 
   @override
   void initState() {
@@ -24,14 +25,15 @@ class _SurahListScreenState extends State<SurahListScreen> {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
       _lastSurah = prefs.getInt('last_surah');
+      _lastPage = prefs.getInt('last_page');
     });
   }
 
-  void _openSurah(int surahNumber) async {
+  void _openSurah(int surahNumber, {int? page}) async {
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => SurahReaderScreen(surahNumber: surahNumber),
+        builder: (_) => SurahReaderScreen(surahNumber: surahNumber, initialPage: page),
       ),
     );
     _loadLastRead();
@@ -56,9 +58,11 @@ class _SurahListScreenState extends State<SurahListScreen> {
               child: ListTile(
                 leading: Icon(Icons.bookmark_rounded, color: Theme.of(context).colorScheme.primary),
                 title: const Text('متابعة القراءة', style: TextStyle(fontWeight: FontWeight.bold)),
-                subtitle: Text('سورة ${quran.getSurahNameArabic(_lastSurah!)}'),
+                subtitle: Text(
+                  'سورة ${quran.getSurahNameArabic(_lastSurah!)} ${_lastPage != null ? "• صفحة $_lastPage" : ""}',
+                ),
                 trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
-                onTap: () => _openSurah(_lastSurah!),
+                onTap: () => _openSurah(_lastSurah!, page: _lastPage),
               ),
             ),
           ),
@@ -82,6 +86,7 @@ class _SurahListScreenState extends State<SurahListScreen> {
               final surahNum = filteredSurahs[index];
               final nameAr = quran.getSurahNameArabic(surahNum);
               final verseCount = quran.getVerseCount(surahNum);
+              final pageNum = quran.getPageNumber(surahNum, 1);
               final place = quran.getPlaceOfRevelation(surahNum) == 'Makkah' ? 'مكية' : 'مدنية';
 
               return ListTile(
@@ -96,7 +101,7 @@ class _SurahListScreenState extends State<SurahListScreen> {
                   ),
                 ),
                 title: Text('سورة $nameAr', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
-                subtitle: Text('$place • $verseCount آية'),
+                subtitle: Text('$place • $verseCount آية • صفحة $pageNum'),
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () => _openSurah(surahNum),
               );
