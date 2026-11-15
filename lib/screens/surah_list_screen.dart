@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:quran/quran.dart' as quran;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'surah_reader_screen.dart';
@@ -86,7 +86,7 @@ class _SurahListScreenState extends State<SurahListScreen> {
 
               return ListTile(
                 leading: CircleAvatar(
-                  backgroundColor: Theme.of(context).colorScheme.primary.withOpacity(0.15),
+                  backgroundColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
                   child: Text(
                     '$surahNum',
                     style: TextStyle(
