@@ -1,9 +1,9 @@
 import 'dart:convert';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
-import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class NearbyMosquesScreen extends StatefulWidget {
@@ -26,17 +26,16 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
   final MapController _mapController = MapController();
   bool _isLoading = true;
   List<Map<String, dynamic>> _mosques = [];
-  int _selectedMosqueIndex = -1;
 
   @override
   void initState() {
     super.initState();
-    _fetchMosquesInsideApp();
+    _fetchMosquesReliably();
   }
 
-  Future<void> _fetchMosquesInsideApp() async {
+  Future<void> _fetchMosquesReliably() async {
     setState(() => _isLoading = true);
-    final List<Map<String, dynamic>> loaded = [];
+    final List<Map<String, dynamic>> results = [];
     final Set<String> seen = {};
 
     void addMosque(String name, double mLat, double mLng) {
@@ -45,64 +44,58 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
       seen.add(key);
       final dist = Geolocator.distanceBetween(widget.lat, widget.lng, mLat, mLng);
       if (dist <= 8000) {
-        loaded.add({
-          'name': name.isEmpty ? 'مسجد' : name,
-          'lat': mLat,
-          'lng': mLng,
-          'distance': dist,
-        });
+        results.add({'name': name, 'lat': mLat, 'lng': mLng, 'distance': dist});
       }
     }
 
-    // المحرك الأول: Photon OSM API (سريع جداً ولا يُحظر)
+    // المحرك الأول: Nominatim OpenStreetMap (سريع وموثوق جداً عبر GET)
     try {
-      final uri = Uri.parse(
-        'https://photon.komoot.io/api/?q=مسجد&lat=${widget.lat}&lon=${widget.lng}&limit=25',
+      final delta = 0.04; // نطاق ~4.5 كم حول المستخدم
+      final viewbox = '${widget.lng - delta},${widget.lat + delta},${widget.lng + delta},${widget.lat - delta}';
+      final url = Uri.parse(
+        'https://nominatim.openstreetmap.org/search?q=mosque&format=json&bounded=1&viewbox=$viewbox&limit=50&accept-language=ar',
       );
-      final res = await http.get(uri, headers: {'User-Agent': 'NoorQuranApp/1.0'}).timeout(const Duration(seconds: 8));
+      final res = await http.get(url, headers: {'User-Agent': 'NoorQuranApp/1.0 (syria.noor.quran)'}).timeout(const Duration(seconds: 10));
       if (res.statusCode == 200) {
-        final data = json.decode(utf8.decode(res.bodyBytes));
-        for (final feat in (data['features'] as List? ?? [])) {
-          final coords = feat['geometry']?['coordinates'] as List?;
-          final props = feat['properties'] as Map? ?? {};
-          if (coords != null && coords.length >= 2) {
-            final mLng = (coords[0] as num).toDouble();
-            final mLat = (coords[1] as num).toDouble();
-            final name = (props['name'] ?? 'مسجد').toString();
-            addMosque(name, mLat, mLng);
+        final list = json.decode(utf8.decode(res.bodyBytes)) as List;
+        for (final item in list) {
+          final mLat = double.tryParse(item['lat']?.toString() ?? '');
+          final mLng = double.tryParse(item['lon']?.toString() ?? '');
+          if (mLat != null && mLng != null) {
+            final rawName = (item['display_name']?.toString() ?? 'مسجد').split(',').first.trim();
+            addMosque(rawName.isEmpty ? 'مسجد' : rawName, mLat, mLng);
           }
         }
       }
     } catch (_) {}
 
-    // المحرك الثاني الاحتياطي: Nominatim OSM Search
-    if (loaded.length < 3) {
+    // المحرك الثاني: Overpass GET لتعزيز النتائج
+    if (results.length < 5) {
       try {
-        final delta = 0.045;
-        final viewbox = '${widget.lng - delta},${widget.lat + delta},${widget.lng + delta},${widget.lat - delta}';
-        final uri = Uri.parse(
-          'https://nominatim.openstreetmap.org/search?format=json&q=mosque&bounded=1&viewbox=$viewbox&limit=25&accept-language=ar',
-        );
-        final res = await http.get(uri, headers: {'User-Agent': 'NoorQuranApp/1.0'}).timeout(const Duration(seconds: 8));
+        final q = '[out:json][timeout:10];(nwr["amenity"="place_of_worship"]["religion"="muslim"](around:4000,${widget.lat},${widget.lng});nwr["building"="mosque"](around:4000,${widget.lat},${widget.lng}););out center;';
+        final url = Uri.parse('https://overpass.kumi.systems/api/interpreter?data=${Uri.encodeComponent(q)}');
+        final res = await http.get(url, headers: {'User-Agent': 'NoorQuranApp/1.0'}).timeout(const Duration(seconds: 10));
         if (res.statusCode == 200) {
-          final list = json.decode(utf8.decode(res.bodyBytes)) as List;
-          for (final item in list) {
-            final mLat = double.tryParse(item['lat']?.toString() ?? '');
-            final mLng = double.tryParse(item['lon']?.toString() ?? '');
+          final data = json.decode(utf8.decode(res.bodyBytes));
+          final elements = (data['elements'] as List?) ?? [];
+          for (final el in elements) {
+            final double? mLat = (el['lat'] as num?)?.toDouble() ?? (el['center']?['lat'] as num?)?.toDouble();
+            final double? mLng = (el['lon'] as num?)?.toDouble() ?? (el['center']?['lon'] as num?)?.toDouble();
             if (mLat != null && mLng != null) {
-              final rawName = (item['display_name'] ?? 'مسجد').toString().split(',').first.trim();
-              addMosque(rawName, mLat, mLng);
+              final tags = (el['tags'] as Map?) ?? {};
+              final name = tags['name:ar'] ?? tags['name'] ?? 'مسجد';
+              addMosque(name.toString(), mLat, mLng);
             }
           }
         }
       } catch (_) {}
     }
 
-    loaded.sort((a, b) => (a['distance'] as double).compareTo(b['distance'] as double));
+    results.sort((a, b) => (a['distance'] as double).compareTo(b['distance'] as double));
 
     if (mounted) {
       setState(() {
-        _mosques = loaded;
+        _mosques = results;
         _isLoading = false;
       });
     }
@@ -113,12 +106,9 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
     return '${(meters / 1000).toStringAsFixed(1)} كم';
   }
 
-  Future<void> _navigateToMosque(double lat, double lng, String name) async {
+  Future<void> _navigateToMosque(double lat, double lng) async {
     final uri = Uri.parse('https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=walking');
-    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
-      final fallback = Uri.parse('geo:$lat,$lng?q=$lat,$lng(${Uri.encodeComponent(name)})');
-      await launchUrl(fallback, mode: LaunchMode.externalApplication);
-    }
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
   @override
@@ -129,30 +119,29 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('المساجد القريبة (${widget.cityName})', style: const TextStyle(fontWeight: FontWeight.bold)),
+        title: Text('مساجد ${widget.cityName}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
         centerTitle: true,
         actions: [
           IconButton(
             icon: const Icon(Icons.my_location_rounded),
-            tooltip: 'موقعي الحالي',
             onPressed: () => _mapController.move(userPoint, 15.0),
           ),
           IconButton(
             icon: const Icon(Icons.refresh_rounded),
-            onPressed: _fetchMosquesInsideApp,
+            onPressed: _fetchMosquesReliably,
           ),
         ],
       ),
       body: Column(
         children: [
-          // خريطة تفاعلية مدمجة داخل التطبيق
+          // 1. الخريطة التفاعلية الحية داخل التطبيق نفسه
           SizedBox(
-            height: 250,
+            height: 260,
             child: FlutterMap(
               mapController: _mapController,
               options: MapOptions(
                 initialCenter: userPoint,
-                initialZoom: 14.5,
+                initialZoom: 14.8,
               ),
               children: [
                 TileLayer(
@@ -161,7 +150,7 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
                 ),
                 MarkerLayer(
                   markers: [
-                    // دبوس موقعك الحالي
+                    // دبوس موقع المستخدم الحالي (أزرق)
                     Marker(
                       point: userPoint,
                       width: 44,
@@ -172,28 +161,32 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
                           shape: BoxShape.circle,
                         ),
                         child: const Center(
-                          child: Icon(Icons.person_pin_circle_rounded, color: Colors.blue, size: 32),
+                          child: Icon(Icons.my_location_rounded, color: Colors.blue, size: 26),
                         ),
                       ),
                     ),
-                    // دبابيس المساجد القريبة
-                    ...List.generate(_mosques.length, (i) {
-                      final m = _mosques[i];
-                      final isSelected = i == _selectedMosqueIndex;
+                    // دبابيس المساجد المكتشفة (خضراء)
+                    ..._mosques.map((m) {
                       return Marker(
-                        point: LatLng(m['lat'], m['lng']),
-                        width: 44,
-                        height: 44,
+                        point: LatLng(m['lat'] as double, m['lng'] as double),
+                        width: 40,
+                        height: 40,
                         child: GestureDetector(
-                          onTap: () => setState(() => _selectedMosqueIndex = i),
+                          onTap: () {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('${m['name']} (${_formatDistance(m['distance'])})'),
+                                duration: const Duration(seconds: 2),
+                              ),
+                            );
+                          },
                           child: Container(
                             decoration: BoxDecoration(
-                              color: isSelected ? gold : emerald,
+                              color: emerald,
                               shape: BoxShape.circle,
                               border: Border.all(color: Colors.white, width: 2),
-                              boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
                             ),
-                            child: const Icon(Icons.mosque_rounded, color: Colors.white, size: 22),
+                            child: const Icon(Icons.mosque_rounded, color: Colors.white, size: 20),
                           ),
                         ),
                       );
@@ -204,32 +197,21 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
             ),
           ),
 
-          // قائمة المساجد المرتبة من الأقرب للأبعد
+          // 2. قائمة المساجد أسفل الخريطة
           Expanded(
             child: _isLoading
-                ? const Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        CircularProgressIndicator(color: emerald),
-                        SizedBox(height: 10),
-                        Text('جاري تحديد المساجد المحيطة بك...'),
-                      ],
-                    ),
-                  )
+                ? const Center(child: CircularProgressIndicator(color: emerald))
                 : _mosques.isEmpty
                     ? Center(
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            const Icon(Icons.mosque_outlined, size: 48, color: gold),
+                            const Text('يمكنك تحريك الخريطة بالأعلى لاستكشاف منطقتك'),
                             const SizedBox(height: 8),
-                            const Text('لم تظهر مساجد مسجلة في هذه المنطقة'),
-                            const SizedBox(height: 12),
                             ElevatedButton.icon(
-                              onPressed: _fetchMosquesInsideApp,
+                              onPressed: _fetchMosquesReliably,
                               icon: const Icon(Icons.refresh),
-                              label: const Text('تحديث البحث'),
+                              label: const Text('تحديث القائمة'),
                             ),
                           ],
                         ),
@@ -241,57 +223,24 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
                         itemBuilder: (context, index) {
                           final m = _mosques[index];
                           final isNearest = index == 0;
-                          final isSelected = index == _selectedMosqueIndex;
-
                           return Card(
-                            elevation: isSelected ? 4 : 1,
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(14),
-                              side: BorderSide(
-                                color: isSelected ? gold : (isNearest ? emerald : gold.withValues(alpha: 0.25)),
-                                width: isSelected || isNearest ? 1.6 : 1,
-                              ),
+                              side: BorderSide(color: isNearest ? emerald : gold.withValues(alpha: 0.25)),
                             ),
                             child: ListTile(
                               onTap: () {
-                                setState(() => _selectedMosqueIndex = index);
                                 _mapController.move(LatLng(m['lat'], m['lng']), 16.5);
                               },
                               leading: CircleAvatar(
                                 backgroundColor: isNearest ? emerald : gold.withValues(alpha: 0.18),
                                 child: Icon(Icons.mosque_rounded, color: isNearest ? Colors.white : gold),
                               ),
-                              title: Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      m['name'],
-                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15.5),
-                                    ),
-                                  ),
-                                  if (isNearest)
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                      decoration: BoxDecoration(
-                                        color: emerald.withValues(alpha: 0.15),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: const Text(
-                                        'الأقرب',
-                                        style: TextStyle(fontSize: 11, color: emerald, fontWeight: FontWeight.bold),
-                                      ),
-                                    ),
-                                ],
-                              ),
-                              subtitle: Padding(
-                                padding: const EdgeInsets.only(top: 4),
-                                child: Text('المسافة: ${_formatDistance(m['distance'])}'),
-                              ),
-                              trailing: FilledButton.icon(
-                                style: FilledButton.styleFrom(backgroundColor: emerald),
-                                onPressed: () => _navigateToMosque(m['lat'], m['lng'], m['name']),
-                                icon: const Icon(Icons.directions_walk_rounded, size: 16),
-                                label: const Text('اتجاه'),
+                              title: Text(m['name'], style: const TextStyle(fontWeight: FontWeight.bold)),
+                              subtitle: Text('يبعد عنك: ${_formatDistance(m['distance'])} • اضغط لعرضه على الخريطة'),
+                              trailing: IconButton(
+                                icon: const Icon(Icons.directions_walk_rounded, color: emerald),
+                                onPressed: () => _navigateToMosque(m['lat'], m['lng']),
                               ),
                             ),
                           );
