@@ -1,46 +1,45 @@
 import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
-import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:qcf_quran/qcf_quran.dart';
 import 'package:quran/quran.dart' as quran;
 import 'package:shared_preferences/shared_preferences.dart';
+
 import '../main.dart';
 import '../widgets/quran_search_sheet.dart';
 
+/// Full-screen Mushaf reader — QCF text rendering (Madina Mushaf font),
+/// works fully offline (fonts are bundled in the qcf_quran package).
 class SurahReaderScreen extends StatefulWidget {
-  final int surahNumber;
+  final int? surahNumber;
   final int? initialPage;
-
-  const SurahReaderScreen({
-    super.key,
-    required this.surahNumber,
-    this.initialPage,
-  });
+  const SurahReaderScreen({super.key, this.surahNumber, this.initialPage = 1});
 
   @override
   State<SurahReaderScreen> createState() => _SurahReaderScreenState();
 }
 
 class _SurahReaderScreenState extends State<SurahReaderScreen> {
-  late PageController _pageController;
-  late int _currentPage;
-  bool _showControls = false; // يبدأ بواجهة القراءة الصافية المطابقة للصورة، وتظهر الأشرطة عند اللمس
-  int? _bookmarkedPage;
-
-  final AudioPlayer _audioPlayer = AudioPlayer();
-  bool _isPlaying = false;
-  bool _isLoadingAudio = false;
-  int _selectedReciterIndex = 0;
+  late final PageController _pageController;
+  int _currentPage = 1;
+  bool _showControls = false;
+  bool _isBookmarked = false;
+  double _pageZoom = 1.12;
+  late final AudioPlayer _audioPlayer;
+  bool _isPlayingAudio = false;
+  int _currentReciterIndex = 0;
   Timer? _clockTimer;
-  String _currentTimeStr = '';
+  String _currentTime = '';
 
-  final List<Map<String, String>> _reciters = [
-    {'name': 'محمود الحصري', 'server': 'https://server13.mp3quran.net/husr'},
-    {'name': 'مشاري العفاسي', 'server': 'https://server8.mp3quran.net/afs'},
-    {'name': 'محمد صديق المنشاوي', 'server': 'https://server10.mp3quran.net/minsh'},
-    {'name': 'عبد الباسط عبد الصمد', 'server': 'https://server7.mp3quran.net/basit'},
-    {'name': 'ماهر المعيقلي', 'server': 'https://server12.mp3quran.net/maher'},
+  static const List<Map<String, String>> _reciters = [
+    {'name': 'محمود الحصري', 'server': 'server13.mp3quran.net/husr'},
+    {'name': 'مشاري العفاسي', 'server': 'server8.mp3quran.net/afs'},
+    {'name': 'محمد صديق المنشاوي', 'server': 'server10.mp3quran.net/minsh'},
+    {'name': 'عبد الباسط عبد الصمد', 'server': 'server7.mp3quran.net/basit'},
+    {'name': 'ماهر المعيقلي', 'server': 'server12.mp3quran.net/maher'},
   ];
 
   static const List<String> _juzNamesArabic = [
@@ -79,56 +78,20 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
   @override
   void initState() {
     super.initState();
-    _currentPage = widget.initialPage ?? quran.getPageNumber(widget.surahNumber, 1);
+    _currentPage = widget.initialPage ??
+        (widget.surahNumber != null
+            ? quran.getPageNumber(widget.surahNumber!, 1)
+            : 1);
     _pageController = PageController(initialPage: _currentPage - 1);
-    _saveLastRead(_currentPage);
-    _loadBookmark();
+    _audioPlayer = AudioPlayer();
+    _loadSettings();
     _updateClock();
-    _clockTimer = Timer.periodic(const Duration(seconds: 15), (_) => _updateClock());
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _precacheSurroundingPages(_currentPage);
-    });
-
+    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) => _updateClock());
     _audioPlayer.playerStateStream.listen((state) {
-      if (!mounted) return;
-      setState(() {
-        _isPlaying = state.playing;
-        _isLoadingAudio = state.processingState == ProcessingState.loading ||
-            state.processingState == ProcessingState.buffering;
-        if (state.processingState == ProcessingState.completed) {
-          _isPlaying = false;
-        }
-      });
-    });
-  }
-
-  void _precacheSurroundingPages(int centerPage) {
-    if (!mounted) return;
-    final pagesToPreload = [
-      centerPage + 1,
-      centerPage + 2,
-      centerPage + 3,
-      centerPage + 4,
-      centerPage + 5,
-      centerPage - 1,
-      centerPage - 2,
-    ];
-    for (final p in pagesToPreload) {
-      if (p >= 1 && p <= 604) {
-        precacheImage(CachedNetworkImageProvider(_getPageImageUrl(p)), context);
+      if (mounted && state.processingState == ProcessingState.completed) {
+        setState(() => _isPlayingAudio = false);
       }
-    }
-  }
-
-  void _updateClock() {
-    final now = DateTime.now();
-    int h = now.hour % 12;
-    if (h == 0) h = 12;
-    final m = now.minute.toString().padLeft(2, '0');
-    if (mounted) {
-      setState(() => _currentTimeStr = _toArabicDigits('$h:$m'));
-    }
+    });
   }
 
   @override
@@ -139,139 +102,179 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
     super.dispose();
   }
 
-  Future<void> _loadBookmark() async {
+  void _updateClock() {
+    final now = DateTime.now();
+    final h = now.hour % 12 == 0 ? 12 : now.hour % 12;
+    final m = now.minute.toString().padLeft(2, '0');
+    final s = now.second.toString().padLeft(2, '0');
+    final period = now.hour >= 12 ? 'م' : 'ص';
+    if (mounted) setState(() => _currentTime = '$h:$m:$s $period');
+  }
+
+  Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
-    setState(() => _bookmarkedPage = prefs.getInt('bookmarked_page'));
+    if (!mounted) return;
+    setState(() {
+      _isBookmarked = prefs.getInt('bookmarked_page') == _currentPage;
+      _pageZoom = prefs.getDouble('mushaf_page_zoom') ?? 1.12;
+    });
+  }
+
+  Future<void> _saveZoom() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('mushaf_page_zoom', _pageZoom);
+  }
+
+  Future<void> _saveLastRead() async {
+    final prefs = await SharedPreferences.getInstance();
+    final surah = quran.getPageData(_currentPage).isNotEmpty
+        ? quran.getPageData(_currentPage)[0]['surah'] as int
+        : 1;
+    await prefs.setInt('last_page', _currentPage);
+    await prefs.setInt('last_surah', surah);
+  }
+
+  void _onPageChanged(int page) {
+    setState(() {
+      _currentPage = page;
+      _showControls = false;
+    });
+    _saveLastRead();
+    SharedPreferences.getInstance().then((prefs) {
+      if (mounted) {
+        setState(() => _isBookmarked = prefs.getInt('bookmarked_page') == page);
+      }
+    });
+  }
+
+  void _jumpToPage(int page) {
+    if (page < 1 || page > 604) return;
+    _pageController.jumpToPage(page - 1);
   }
 
   Future<void> _toggleBookmark() async {
     final prefs = await SharedPreferences.getInstance();
-    if (_bookmarkedPage == _currentPage) {
+    if (_isBookmarked) {
       await prefs.remove('bookmarked_page');
-      setState(() => _bookmarkedPage = null);
     } else {
       await prefs.setInt('bookmarked_page', _currentPage);
-      setState(() => _bookmarkedPage = _currentPage);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('تم حفظ العلامة المرجعية عند صفحة ${_toArabicDigits('$_currentPage')}')),
-        );
-      }
     }
-  }
-
-  Future<void> _saveLastRead(int page) async {
-    final prefs = await SharedPreferences.getInstance();
-    final pageData = quran.getPageData(page);
-    final firstSurahOnPage = pageData.isNotEmpty ? pageData.first['surah'] as int : widget.surahNumber;
-    await prefs.setInt('last_page', page);
-    await prefs.setInt('last_surah', firstSurahOnPage);
-  }
-
-  String _toArabicDigits(String input) {
-    const en = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
-    const ar = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
-    String res = input;
-    for (int i = 0; i < 10; i++) {
-      res = res.replaceAll(en[i], ar[i]);
-    }
-    return res;
-  }
-
-  String _getPageImageUrl(int pageNumber) {
-    // صور مصحف مجمع الملك فهد عالية الدقة بشمسات الآيات الذهبية والزيتية
-    final padded = pageNumber.toString().padLeft(3, '0');
-    return 'https://android.quran.com/data/width_1920/page$padded.png';
-  }
-
-  Future<void> _toggleAudioPlay(int surahNum) async {
-    if (_isPlaying) {
-      await _audioPlayer.pause();
-      return;
-    }
-    try {
-      final server = _reciters[_selectedReciterIndex]['server']!;
-      final surahCode = surahNum.toString().padLeft(3, '0');
-      final url = '$server/$surahCode.mp3';
-      await _audioPlayer.setUrl(url);
-      await _audioPlayer.play();
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تعذر تشغيل التلاوة، تأكد من اتصال الإنترنت')),
-        );
-      }
-    }
-  }
-
-  void _pickReciter() {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('اختر القارئ', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            ),
-            ...List.generate(_reciters.length, (i) {
-              return ListTile(
-                leading: Icon(
-                  i == _selectedReciterIndex ? Icons.radio_button_checked : Icons.radio_button_off,
-                  color: const Color(0xFF8C7A4B),
-                ),
-                title: Text(_reciters[i]['name']!, style: const TextStyle(fontWeight: FontWeight.bold)),
-                onTap: () async {
-                  Navigator.pop(ctx);
-                  final wasPlaying = _isPlaying;
-                  await _audioPlayer.stop();
-                  setState(() => _selectedReciterIndex = i);
-                  if (wasPlaying) {
-                    final pageData = quran.getPageData(_currentPage);
-                    final s = pageData.isNotEmpty ? pageData.first['surah'] as int : widget.surahNumber;
-                    _toggleAudioPlay(s);
-                  }
-                },
-              );
-            }),
-          ],
-        ),
-      ),
-    );
+    if (mounted) setState(() => _isBookmarked = !_isBookmarked);
   }
 
   void _openInMushafSearch() {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      useSafeArea: true,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
-      builder: (ctx) {
-        return SizedBox(
-          height: MediaQuery.of(context).size.height * 0.85,
+      backgroundColor: Colors.transparent,
+      builder: (_) => QuranSearchView(
+        onSelectPage: (page) {
+          Navigator.of(context).pop();
+          _jumpToPage(page);
+        },
+      ),
+    );
+  }
+
+  void _showMushafSettingsSheet() {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) {
+        final isDark = NoorQuranApp.of(context)!.isDarkMode;
+        return Container(
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E1F1E) : Colors.white,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          padding: const EdgeInsets.fromLTRB(24, 12, 24, 32),
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('البحث في آيات المصحف', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                    IconButton(
-                      icon: const Icon(Icons.close_rounded),
-                      onPressed: () => Navigator.pop(ctx),
-                    ),
-                  ],
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.withValues(alpha: 0.4),
+                  borderRadius: BorderRadius.circular(2),
                 ),
               ),
-              Expanded(
-                child: QuranSearchView(
-                  onSelectPage: (page) {
-                    Navigator.pop(ctx);
-                    _pageController.jumpToPage(page - 1);
-                  },
+              const SizedBox(height: 20),
+              Text(
+                'إعدادات المصحف',
+                style: GoogleFonts.amiri(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: isDark ? Colors.white : const Color(0xFF2D2A26),
+                ),
+              ),
+              const SizedBox(height: 20),
+              SegmentedButton<bool>(
+                segments: [
+                  ButtonSegment<bool>(
+                    value: false,
+                    label: Text('ورقي كريمي', style: GoogleFonts.amiri(fontSize: 14)),
+                  ),
+                  ButtonSegment<bool>(
+                    value: true,
+                    label: Text('ليلي مريح', style: GoogleFonts.amiri(fontSize: 14)),
+                  ),
+                ],
+                selected: <bool>{isDark},
+                onSelectionChanged: (Set<bool> selected) {
+                  if (selected.first != isDark) {
+                    NoorQuranApp.of(context)!.toggleTheme();
+                  }
+                },
+              ),
+              const SizedBox(height: 24),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'حجم الخط',
+                    style: GoogleFonts.amiri(
+                      fontSize: 18,
+                      color: isDark ? Colors.white : const Color(0xFF2D2A26),
+                    ),
+                  ),
+                  Row(
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.remove_circle_outline),
+                        onPressed: () {
+                          setState(() {
+                            _pageZoom = (_pageZoom - 0.04) < 1.0 ? 1.0 : _pageZoom - 0.04;
+                          });
+                          _saveZoom();
+                        },
+                      ),
+                      SizedBox(
+                        width: 56,
+                        child: Text(
+                          '${(_pageZoom * 100).round()}%',
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.amiri(fontSize: 16),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.add_circle_outline),
+                        onPressed: () {
+                          setState(() {
+                            _pageZoom = (_pageZoom + 0.04) > 1.28 ? 1.28 : _pageZoom + 0.04;
+                          });
+                          _saveZoom();
+                        },
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'الخط يعمل بدون إنترنت — لا حاجة لتحميل الصفحات',
+                style: GoogleFonts.amiri(
+                  fontSize: 13,
+                  color: Colors.grey,
                 ),
               ),
             ],
@@ -281,301 +284,286 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final appState = NoorQuranApp.of(context);
-    final isDark = appState?.isDarkMode ?? false;
+  Future<void> _toggleAudioPlay() async {
+    if (_isPlayingAudio) {
+      await _audioPlayer.pause();
+      setState(() => _isPlayingAudio = false);
+      return;
+    }
+    try {
+      final pageData = quran.getPageData(_currentPage);
+      final surah = pageData.isNotEmpty ? pageData[0]['surah'] as int : 1;
+      final server = _reciters[_currentReciterIndex]['server']!;
+      final url =
+          'https://$server/${surah.toString().padLeft(3, '0')}.mp3';
+      await _audioPlayer.setUrl(url);
+      await _audioPlayer.play();
+      setState(() => _isPlayingAudio = true);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('تعذر تشغيل الصوت — تحقق من الإنترنت')),
+        );
+      }
+    }
+  }
 
-    final pageData = quran.getPageData(_currentPage);
-    final currentSurah = pageData.isNotEmpty ? pageData.first['surah'] as int : widget.surahNumber;
-
-    // ألوان الورق والحبر الذهبي الدافئ المطابقة للصورة المرفقة تماماً
-    final bgColor = isDark ? const Color(0xFF141413) : const Color(0xFFFDFCF9);
-    final goldText = isDark ? const Color(0xFFC8B27D) : const Color(0xFF8B7544);
-    final subtleText = isDark ? Colors.white54 : const Color(0xFF9C9688);
-
-    return Scaffold(
-      backgroundColor: bgColor,
-      body: SafeArea(
-        child: Stack(
+  void _pickReciter() {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => Container(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            // 1. صفحة المصحف الكاملة بنفس الجمالية والألوان
-            GestureDetector(
-              onTap: () => setState(() => _showControls = !_showControls),
-              child: PageView.builder(
-                controller: _pageController,
-                itemCount: 604,
-                physics: const BouncingScrollPhysics(),
-                onPageChanged: (index) {
-                  final newPage = index + 1;
-                  setState(() => _currentPage = newPage);
-                  _saveLastRead(newPage);
-                  _precacheSurroundingPages(newPage);
-                },
-                itemBuilder: (context, index) {
-                  final pageNum = index + 1;
-                  final pData = quran.getPageData(pageNum);
-                  final sNum = pData.isNotEmpty ? pData.first['surah'] as int : 1;
-                  final jNum = pData.isNotEmpty ? quran.getJuzNumber(sNum, pData.first['start'] as int) : 1;
-                  final juzText = _juzNamesArabic[(jNum - 1).clamp(0, 29)];
-                  final surahName = quran.getSurahNameArabic(sNum);
-                  final isPageRight = pageNum % 2 == 1;
-                  final isFirstTwoPages = pageNum == 1 || pageNum == 2;
-
-                  return LayoutBuilder(
-                    builder: (context, constraints) {
-                      return Column(
-                        children: [
-                          // الترويسة العلوية الأنيقة المطابقة للصورة: (الجزء الأول) يميناً | (صفحة يمنى + الساعة) وسطاً | (البقرة) يساراً
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(18, 10, 18, 4),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    juzText,
-                                    textAlign: TextAlign.right,
-                                    style: GoogleFonts.amiri(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.bold,
-                                      color: goldText,
-                                    ),
-                                  ),
-                                ),
-                                Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(
-                                      isPageRight ? 'صفحة يمنى' : 'صفحة يسرى',
-                                      style: TextStyle(
-                                        fontSize: 11.5,
-                                        fontWeight: FontWeight.w600,
-                                        color: subtleText,
-                                      ),
-                                    ),
-                                    Text(
-                                      _currentTimeStr,
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: subtleText.withValues(alpha: 0.85),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                Expanded(
-                                  child: Text(
-                                    surahName,
-                                    textAlign: TextAlign.left,
-                                    style: GoogleFonts.amiri(
-                                      fontSize: 17,
-                                      fontWeight: FontWeight.bold,
-                                      color: goldText,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-
-                          // متن الآيات بكامل عرض الشاشة بدون تمطيط أو حذف
-                          Expanded(
-                            child: InteractiveViewer(
-                              minScale: 1.0,
-                              maxScale: 2.5,
-                              child: Center(
-                                child: Padding(
-                                  padding: EdgeInsets.symmetric(
-                                    horizontal: isFirstTwoPages ? 10 : 2,
-                                  ),
-                                  child: ColorFiltered(
-                                    colorFilter: isDark
-                                        ? const ColorFilter.matrix([
-                                            -0.92, 0, 0, 0, 238,
-                                            0, -0.92, 0, 0, 236,
-                                            0, 0, -0.92, 0, 230,
-                                            0, 0, 0, 1, 0,
-                                          ])
-                                        : const ColorFilter.mode(Colors.transparent, BlendMode.dst),
-                                    child: CachedNetworkImage(
-                                      imageUrl: _getPageImageUrl(pageNum),
-                                      width: constraints.maxWidth,
-                                      fit: BoxFit.contain,
-                                      filterQuality: FilterQuality.high,
-                                      fadeInDuration: const Duration(milliseconds: 50),
-                                      placeholder: (context, url) => Center(
-                                        child: CircularProgressIndicator(color: goldText, strokeWidth: 2),
-                                      ),
-                                      errorWidget: (context, url, error) => Column(
-                                        mainAxisAlignment: MainAxisAlignment.center,
-                                        children: [
-                                          Icon(Icons.wifi_off_rounded, size: 42, color: goldText),
-                                          const SizedBox(height: 8),
-                                          Text(
-                                            'صفحة ${_toArabicDigits('$pageNum')}\nافتح الصفحة مرة واحدة بالإنترنت لحفظها أوفلاين',
-                                            textAlign: TextAlign.center,
-                                            style: TextStyle(color: goldText),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-
-                          // التذييل السفلي: رقم الصفحة باللون الذهبي الدافئ في المنتصف تماماً كالصورة
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 8, top: 2),
-                            child: Text(
-                              _toArabicDigits('$pageNum'),
-                              style: GoogleFonts.amiri(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                                color: goldText,
-                              ),
-                            ),
-                          ),
-                        ],
-                      );
-                    },
-                  );
+            for (int i = 0; i < _reciters.length; i++)
+              ListTile(
+                title: Text(_reciters[i]['name']!),
+                trailing: i == _currentReciterIndex
+                    ? const Icon(Icons.check, color: Color(0xFF0D6E52))
+                    : null,
+                onTap: () {
+                  setState(() => _currentReciterIndex = i);
+                  Navigator.of(context).pop();
                 },
               ),
-            ),
+          ],
+        ),
+      ),
+    );
+  }
 
-            // 2. شريط الأدوات العلوي العائم (يظهر عند اللمس فقط)
-            if (_showControls)
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
+  @override
+  Widget build(BuildContext context) {
+    final isDark = NoorQuranApp.of(context)!.isDarkMode;
+    final bgColor = isDark ? const Color(0xFF121413) : const Color(0xFFFAF6EE);
+    final goldColor = const Color(0xFF8A723D);
+    final pageData = quran.getPageData(_currentPage);
+    final surahNumber = pageData.isNotEmpty ? pageData[0]['surah'] as int : 1;
+    final surahName = quran.getSurahNameArabic(surahNumber);
+    final juzNumber = quran.getJuzNumber(surahNumber, 1);
+    final juzName = _juzNamesArabic[juzNumber - 1];
+    final pageSide = _currentPage % 2 == 0 ? 'يسرى' : 'يمنى';
+
+    final qcfTheme = isDark
+        ? QcfThemeData.dark().copyWith(
+            pageBackgroundColor: bgColor,
+            verseNumberColor: const Color(0xFFD2BA80),
+          )
+        : QcfThemeData(
+            pageBackgroundColor: bgColor,
+            verseTextColor: const Color(0xFF1A1A1A),
+            verseNumberColor: goldColor,
+            basmalaColor: const Color(0xFF1A1A1A),
+            headerTextColor: const Color(0xFF1A1A1A),
+          );
+
+    return ScreenUtilInit(
+      designSize: const Size(390, 844),
+      enableScaleText: () => false,
+      minTextAdapt: true,
+      builder: (_, __) => Scaffold(
+        backgroundColor: bgColor,
+        body: SafeArea(
+          child: Column(
+            children: [
+              AnimatedOpacity(
+                opacity: _showControls ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 250),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
                   decoration: BoxDecoration(
-                    color: bgColor.withValues(alpha: 0.96),
-                    boxShadow: [
-                      BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 6),
-                    ],
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        bgColor,
+                        bgColor.withValues(alpha: 0.0),
+                      ],
+                    ),
                   ),
                   child: Row(
                     children: [
                       IconButton(
-                        icon: Icon(Icons.close_rounded, color: goldText, size: 25),
-                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.arrow_back),
+                        color: goldColor,
+                        onPressed: () => Navigator.of(context).pop(),
                       ),
-                      const Spacer(),
-                      Text(
-                        'سورة ${quran.getSurahNameArabic(currentSurah)}',
-                        style: GoogleFonts.amiri(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: goldText,
+                      Expanded(
+                        child: Column(
+                          children: [
+                            Text(
+                              surahName,
+                              style: GoogleFonts.amiri(
+                                fontSize: 17.5,
+                                fontWeight: FontWeight.bold,
+                                color: isDark ? Colors.white : const Color(0xFF2D2A26),
+                              ),
+                            ),
+                            Text(
+                              '$juzName • الصفحة $_currentPage من 604',
+                              style: GoogleFonts.amiri(
+                                fontSize: 13,
+                                color: Colors.grey,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      const Spacer(),
                       IconButton(
-                        icon: Icon(Icons.search_rounded, color: goldText, size: 23),
-                        tooltip: 'البحث عن آية أو كلمة',
+                        icon: Icon(
+                          _isBookmarked ? Icons.bookmark : Icons.bookmark_border,
+                        ),
+                        color: _isBookmarked ? goldColor : Colors.grey,
+                        onPressed: _toggleBookmark,
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.search),
+                        color: goldColor,
                         onPressed: _openInMushafSearch,
                       ),
                       IconButton(
-                        icon: Icon(Icons.format_list_bulleted_rounded, color: goldText, size: 23),
-                        tooltip: 'فهرس السور',
-                        onPressed: () => Navigator.pop(context),
+                        icon: Icon(
+                          _isPlayingAudio ? Icons.pause : Icons.play_arrow,
+                        ),
+                        color: goldColor,
+                        onPressed: _toggleAudioPlay,
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.settings),
+                        color: goldColor,
+                        onPressed: _showMushafSettingsSheet,
                       ),
                     ],
                   ),
                 ),
               ),
-
-            // 3. شريط التلاوة والتحكم السفلي العائم (يظهر عند اللمس فقط)
-            if (_showControls)
-              Positioned(
-                bottom: 0,
-                left: 0,
-                right: 0,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: bgColor.withValues(alpha: 0.96),
-                    boxShadow: [
-                      BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 8, offset: const Offset(0, -2)),
-                    ],
-                  ),
-                  child: Row(
-                    children: [
-                      IconButton(
-                        icon: Icon(
-                          _bookmarkedPage == _currentPage
-                              ? Icons.bookmark_rounded
-                              : Icons.bookmark_border_rounded,
-                          color: goldText,
-                          size: 25,
-                        ),
-                        onPressed: _toggleBookmark,
-                      ),
-                      const SizedBox(width: 8),
-                      InkWell(
-                        onTap: () => _toggleAudioPlay(currentSurah),
-                        borderRadius: BorderRadius.circular(24),
-                        child: Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                            color: goldText.withValues(alpha: 0.16),
-                            shape: BoxShape.circle,
+              Expanded(
+                child: Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 2),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            juzName,
+                            style: GoogleFonts.amiri(
+                              fontSize: 16.5,
+                              color: goldColor,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
-                          child: _isLoadingAudio
-                              ? Padding(
-                                  padding: const EdgeInsets.all(10),
-                                  child: CircularProgressIndicator(strokeWidth: 2, color: goldText),
-                                )
-                              : Icon(
-                                  _isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                                  color: goldText,
-                                  size: 26,
-                                ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: InkWell(
-                          onTap: _pickReciter,
-                          child: Row(
+                          Text(
+                            _currentTime,
+                            style: GoogleFonts.amiri(
+                              fontSize: 16.5,
+                              color: Colors.grey,
+                            ),
+                          ),
+                          Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Flexible(
-                                child: Text(
-                                  _reciters[_selectedReciterIndex]['name']!,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 14.5,
-                                    fontWeight: FontWeight.bold,
-                                    color: goldText,
-                                  ),
+                              Text(
+                                surahName,
+                                style: GoogleFonts.amiri(
+                                  fontSize: 16.5,
+                                  color: goldColor,
+                                  fontWeight: FontWeight.bold,
                                 ),
                               ),
-                              const SizedBox(width: 4),
-                              Icon(Icons.keyboard_arrow_down_rounded, color: goldText, size: 20),
+                              const SizedBox(width: 6),
+                              Text(
+                                '($pageSide)',
+                                style: GoogleFonts.amiri(
+                                  fontSize: 13,
+                                  color: Colors.grey,
+                                ),
+                              ),
                             ],
                           ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: PageviewQuran(
+                        controller: _pageController,
+                        initialPageNumber: _currentPage,
+                        sp: _pageZoom.sp,
+                        theme: qcfTheme,
+                        onPageChanged: _onPageChanged,
+                        onTap: (_, __) {
+                          setState(() => _showControls = !_showControls);
+                        },
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6, top: 4),
+                      child: Text(
+                        '$_currentPage'.replaceAllMapped(
+                          RegExp(r'\d'),
+                          (m) => '٠١٢٣٤٥٦٧٨٩'[int.parse(m[0]!)],
+                        ),
+                        style: GoogleFonts.amiri(
+                          fontSize: 17.5,
+                          color: goldColor,
                         ),
                       ),
-                      IconButton(
-                        icon: Icon(
-                          isDark ? Icons.light_mode_rounded : Icons.dark_mode_outlined,
-                          color: goldText,
-                          size: 23,
+                    ),
+                  ],
+                ),
+              ),
+              AnimatedOpacity(
+                opacity: _showControls ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 250),
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.bottomCenter,
+                      end: Alignment.topCenter,
+                      colors: [
+                        bgColor,
+                        bgColor.withValues(alpha: 0.0),
+                      ],
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      TextButton.icon(
+                        onPressed: _pickReciter,
+                        icon: const Icon(Icons.person, size: 18),
+                        label: Text(
+                          _reciters[_currentReciterIndex]['name']!,
+                          style: GoogleFonts.amiri(fontSize: 14),
                         ),
-                        onPressed: () => appState?.toggleTheme(),
+                      ),
+                      TextButton.icon(
+                        onPressed: () {
+                          if (_isPlayingAudio) _toggleAudioPlay();
+                          setState(() => _isPlayingAudio = false);
+                        },
+                        icon: const Icon(Icons.stop, size: 18),
+                        label: Text(
+                          'إيقاف الصوت',
+                          style: GoogleFonts.amiri(fontSize: 14),
+                        ),
+                      ),
+                      TextButton.icon(
+                        onPressed: () => _jumpToPage(_currentPage + 1),
+                        icon: const Icon(Icons.arrow_forward, size: 18),
+                        label: Text(
+                          'الصفحة التالية',
+                          style: GoogleFonts.amiri(fontSize: 14),
+                        ),
                       ),
                     ],
                   ),
                 ),
               ),
-          ],
+            ],
+          ),
         ),
       ),
     );
