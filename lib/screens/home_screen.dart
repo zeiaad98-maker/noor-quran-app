@@ -1,11 +1,16 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:ui' as ui;
 import 'package:material_ui/material_ui.dart';
+import 'package:flutter/rendering.dart';
 import 'package:adhan/adhan.dart';
 import 'package:hijri/hijri_calendar.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:path_provider/path_provider.dart';
 import '../main.dart';
 import 'surah_reader_screen.dart';
 
@@ -21,7 +26,11 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _timer;
   DateTime _now = DateTime.now();
 
-  // الإحداثيات الافتراضية (دمشق) وتُحدّث آلياً عبر GPS
+  // مفاتيح التقاط الصور للبطاقات
+  final GlobalKey _calendarCardKey = GlobalKey();
+  final GlobalKey _prayerCardKey = GlobalKey();
+  bool _isCapturingImage = false;
+
   double _lat = 33.5138;
   double _lng = 36.2765;
   String _city = 'دمشق';
@@ -39,7 +48,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadSavedLocationAndBookmark();
     _detectLocationAutomatically();
 
-    // تحديث العداد التنازلي كل ثانية
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) {
         setState(() {
@@ -183,6 +191,123 @@ class _HomeScreenState extends State<HomeScreen> {
     return months[(month - 1).clamp(0, 11)];
   }
 
+  /// التقاط البطاقة وتحويلها إلى ملف صورة PNG ثم مشاركتها
+  Future<void> _captureAndShareWidget(GlobalKey key, String fileName, String caption) async {
+    setState(() => _isCapturingImage = true);
+    // انتظار فريم واحد لإخفاء زر المشاركة الصغير قبل التقاط الصورة
+    await Future.delayed(const Duration(milliseconds: 60));
+    try {
+      final boundary = key.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+      if (boundary == null) return;
+
+      final image = await boundary.toImage(pixelRatio: 3.0);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) return;
+
+      final bytes = byteData.buffer.asUint8List();
+      final tempDir = await getTemporaryDirectory();
+      final file = await File('${tempDir.path}/$fileName.png').create();
+      await file.writeAsBytes(bytes);
+
+      await Share.shareXFiles([XFile(file.path)], text: caption);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('تعذر إنشاء الصورة، جرب المشاركة كنص')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isCapturingImage = false);
+    }
+  }
+
+  void _showShareOptions({
+    required String title,
+    required VoidCallback onShareImage,
+    required VoidCallback onShareText,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+              ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Color(0xFF0C6E52),
+                  child: Icon(Icons.image_rounded, color: Colors.white),
+                ),
+                title: const Text('مشاركة كصورة', style: TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: const Text('بطاقة مصممة عالية الدقة جاهزة للحالات والواتساب'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  onShareImage();
+                },
+              ),
+              ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Color(0xFFB8934A),
+                  child: Icon(Icons.text_snippet_rounded, color: Colors.white),
+                ),
+                title: const Text('مشاركة كنص', style: TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: const Text('نص منسّق قابل للنسخ والتعديل'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  onShareText();
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _shareCalendarText(HijriCalendar hijri) {
+    final dayName = _getArabicDayName(_now.weekday);
+    final hDay = _toArabicDigits('${hijri.hDay}');
+    final hMonth = _getHijriMonthArabic(hijri.hMonth);
+    final hYear = _toArabicDigits('${hijri.hYear}');
+    final gDate = '${_toArabicDigits('${_now.day}')} ${_getGregorianMonthArabic(_now.month)} ${_toArabicDigits('${_now.year}')}';
+
+    final message = '''
+📅 تقويم اليوم ($dayName)
+🌙 الهجري: $hDay $hMonth $hYear هـ
+📆 الميلادي: $gDate م
+📍 حسب تقويم $_country
+
+— تطبيق نور القرآن 🕌
+''';
+    Share.share(message.trim());
+  }
+
+  void _sharePrayerTimesText(HijriCalendar hijri) {
+    final dayName = _getArabicDayName(_now.weekday);
+    final hDate = '${_toArabicDigits('${hijri.hDay}')} ${_getHijriMonthArabic(hijri.hMonth)} ${_toArabicDigits('${hijri.hYear}')} هـ';
+
+    final message = '''
+🕌 مواقيت الصلاة اليوم في ($_city، $_country)
+📅 $dayName - $hDate
+
+• الفجر: ${_formatTime12(_prayerTimes.fajr)}
+• الشروق: ${_formatTime12(_prayerTimes.sunrise)}
+• الظهر: ${_formatTime12(_prayerTimes.dhuhr)}
+• العصر: ${_formatTime12(_prayerTimes.asr)}
+• المغرب: ${_formatTime12(_prayerTimes.maghrib)}
+• العشاء: ${_formatTime12(_prayerTimes.isha)}
+
+— تطبيق نور القرآن 🤲
+''';
+    Share.share(message.trim());
+  }
+
   Map<String, dynamic> _getPrayerState() {
     final p = _prayerTimes;
     final list = [
@@ -208,7 +333,6 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
-    // بعد العشاء -> الصلاة القادمة فجر الغد
     final tomorrowFajr = p.fajr.add(const Duration(days: 1));
     return {
       'current': list.last,
@@ -257,7 +381,7 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // 1. الشريط العلوي: لا تنس ذكر الله + زر الإشعارات + زر الإعدادات/المظهر
+                // 1. الشريط العلوي
                 Row(
                   children: [
                     Text(
@@ -293,94 +417,113 @@ class _HomeScreenState extends State<HomeScreen> {
 
                 const SizedBox(height: 16),
 
-                // 2. بطاقتا التقويم الآلي والاختصارات (الأذكار + الختمة)
+                // 2. بطاقتا التقويم الآلي والاختصارات
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // البطاقة اليمنى: التقويم الآلي حسب الموقع
+                    // البطاقة اليمنى: التقويم الآلي (قابلة للالتقاط كصورة)
                     Expanded(
-                      child: Container(
-                        height: 172,
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: cardBg,
-                          borderRadius: BorderRadius.circular(18),
-                          border: Border.all(color: gold.withValues(alpha: 0.25)),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.04),
-                              blurRadius: 8,
-                              offset: const Offset(0, 3),
-                            ),
-                          ],
-                        ),
-                        child: Stack(
-                          children: [
-                            Positioned(
-                              top: 0,
-                              left: 0,
-                              child: Icon(Icons.ios_share_rounded, size: 18, color: gold.withValues(alpha: 0.8)),
-                            ),
-                            Center(
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Text(
-                                    _getArabicDayName(_now.weekday),
-                                    style: GoogleFonts.amiri(
-                                      fontSize: 24,
-                                      fontWeight: FontWeight.bold,
-                                      color: gold,
-                                      height: 1.1,
-                                    ),
-                                  ),
-                                  Text(
-                                    _toArabicDigits('${hijri.hDay}'),
-                                    style: const TextStyle(
-                                      fontSize: 28,
-                                      fontWeight: FontWeight.w900,
-                                      color: emerald,
-                                      height: 1.15,
-                                    ),
-                                  ),
-                                  Text(
-                                    '${_getHijriMonthArabic(hijri.hMonth)} (${_toArabicDigits('${hijri.hMonth}')})\n${_toArabicDigits('${hijri.hYear}')} هـ',
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.bold,
-                                      color: isDark ? Colors.white70 : const Color(0xFF2B332F),
-                                      height: 1.25,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    '${_toArabicDigits('${_now.day}')} ${_getGregorianMonthArabic(_now.month)} ${_toArabicDigits('${_now.year}')}',
-                                    style: TextStyle(
-                                      fontSize: 10.5,
-                                      color: gold.withValues(alpha: 0.9),
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  Text(
-                                    'حسب تقويم $_country',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: isDark ? Colors.white60 : Colors.black54,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
+                      child: RepaintBoundary(
+                        key: _calendarCardKey,
+                        child: Container(
+                          height: 172,
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: cardBg,
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(color: gold.withValues(alpha: 0.25)),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.04),
+                                blurRadius: 8,
+                                offset: const Offset(0, 3),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
+                          child: Stack(
+                            children: [
+                              Center(
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Text(
+                                      _getArabicDayName(_now.weekday),
+                                      style: GoogleFonts.amiri(
+                                        fontSize: 24,
+                                        fontWeight: FontWeight.bold,
+                                        color: gold,
+                                        height: 1.1,
+                                      ),
+                                    ),
+                                    Text(
+                                      _toArabicDigits('${hijri.hDay}'),
+                                      style: const TextStyle(
+                                        fontSize: 28,
+                                        fontWeight: FontWeight.w900,
+                                        color: emerald,
+                                        height: 1.15,
+                                      ),
+                                    ),
+                                    Text(
+                                      '${_getHijriMonthArabic(hijri.hMonth)} (${_toArabicDigits('${hijri.hMonth}')})\n${_toArabicDigits('${hijri.hYear}')} هـ',
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold,
+                                        color: isDark ? Colors.white70 : const Color(0xFF2B332F),
+                                        height: 1.25,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      '${_toArabicDigits('${_now.day}')} ${_getGregorianMonthArabic(_now.month)} ${_toArabicDigits('${_now.year}')}',
+                                      style: TextStyle(
+                                        fontSize: 10.5,
+                                        color: gold.withValues(alpha: 0.9),
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    Text(
+                                      'حسب تقويم $_country',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: isDark ? Colors.white60 : Colors.black54,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              if (!_isCapturingImage)
+                                Positioned(
+                                  top: 0,
+                                  left: 0,
+                                  child: InkWell(
+                                    onTap: () => _showShareOptions(
+                                      title: 'مشاركة بطاقة التقويم',
+                                      onShareImage: () => _captureAndShareWidget(
+                                        _calendarCardKey,
+                                        'noor_quran_calendar',
+                                        'تقويم اليوم حسب تقويم $_country — تطبيق نور القرآن',
+                                      ),
+                                      onShareText: () => _shareCalendarText(hijri),
+                                    ),
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: const Padding(
+                                      padding: EdgeInsets.all(4.0),
+                                      child: Icon(Icons.ios_share_rounded, size: 19, color: gold),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
 
                     const SizedBox(width: 12),
 
-                    // البطاقة اليسرى: أذكار الصباح/المساء + ختماتي
+                    // البطاقة اليسرى: الأذكار + الختمة
                     Expanded(
                       child: Container(
                         height: 172,
@@ -506,7 +649,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
                 const SizedBox(height: 16),
 
-                // 3. شريط أوقات الصلاة + الموقع الجغرافي الآلي
+                // 3. شريط أوقات الصلاة + الموقع + زر المشاركة (صورة أو نص)
                 Row(
                   children: [
                     Container(width: 3.5, height: 20, decoration: BoxDecoration(color: gold, borderRadius: BorderRadius.circular(2))),
@@ -543,287 +686,294 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.all(5),
-                      decoration: BoxDecoration(
-                        color: gold.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(8),
+                    InkWell(
+                      onTap: () => _showShareOptions(
+                        title: 'مشاركة أوقات الصلاة ($_city)',
+                        onShareImage: () => _captureAndShareWidget(
+                          _prayerCardKey,
+                          'noor_quran_prayers',
+                          'مواقيت الصلاة اليوم في $_city، $_country — تطبيق نور القرآن',
+                        ),
+                        onShareText: () => _sharePrayerTimesText(hijri),
                       ),
-                      child: const Icon(Icons.ios_share_rounded, size: 15, color: gold),
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: gold.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Icon(Icons.ios_share_rounded, size: 16, color: gold),
+                      ),
                     ),
                   ],
                 ),
 
                 const SizedBox(height: 12),
 
-                // 4. البطاقة الرئيسية الكبرى (Hero Prayer Card)
-                Container(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(22),
-                    gradient: const LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Color(0xFF283949),
-                        Color(0xFF1D2926),
-                        Color(0xFF111916),
-                      ],
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.18),
-                        blurRadius: 14,
-                        offset: const Offset(0, 6),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
-                        child: Column(
-                          children: [
-                            // شارة الحالة الجوية/الفلكية أعلى اليسار
-                            Align(
-                              alignment: Alignment.centerLeft,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.12),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
-                                ),
+                // 4 & 5. البطاقة الكبرى + جدول الصلوات الست (مغلفة معاً للالتقاط كصورة واحدة متكاملة)
+                RepaintBoundary(
+                  key: _prayerCardKey,
+                  child: Container(
+                    color: pageBg,
+                    child: Column(
+                      children: [
+                        Container(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(22),
+                            gradient: const LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Color(0xFF283949),
+                                Color(0xFF1D2926),
+                                Color(0xFF111916),
+                              ],
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.18),
+                                blurRadius: 14,
+                                offset: const Offset(0, 6),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
                                 child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.center,
                                   children: [
                                     Row(
-                                      mainAxisSize: MainAxisSize.min,
+                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                       children: [
-                                        Text(
-                                          _toArabicDigits('١٤°'),
-                                          style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                          decoration: BoxDecoration(
+                                            color: Colors.white.withValues(alpha: 0.12),
+                                            borderRadius: BorderRadius.circular(12),
+                                            border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+                                          ),
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.center,
+                                            children: [
+                                              Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Text(
+                                                    _toArabicDigits('١٤°'),
+                                                    style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
+                                                  ),
+                                                  const SizedBox(width: 4),
+                                                  const Icon(Icons.nightlight_round, color: Colors.white70, size: 16),
+                                                ],
+                                              ),
+                                              Text(
+                                                'تحديث آلي ${_formatTime12(_now)}',
+                                                style: const TextStyle(color: Colors.white60, fontSize: 9.5),
+                                              ),
+                                            ],
+                                          ),
                                         ),
-                                        const SizedBox(width: 4),
-                                        const Icon(Icons.nightlight_round, color: Colors.white70, size: 16),
+                                        if (_isCapturingImage)
+                                          Text(
+                                            '$_city، $_country',
+                                            style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold),
+                                          ),
                                       ],
                                     ),
+                                    const SizedBox(height: 4),
                                     Text(
-                                      'تحديث آلي ${_formatTime12(_now)}',
-                                      style: const TextStyle(color: Colors.white60, fontSize: 9.5),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-
-                            const SizedBox(height: 4),
-
-                            Text(
-                              'باقي على ${nextPrayer['name']}',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-
-                            const SizedBox(height: 4),
-
-                            // العداد التنازلي الرقمي المضيء
-                            Text(
-                              _formatCountdown(remaining),
-                              style: const TextStyle(
-                                color: Color(0xFF1ED788),
-                                fontSize: 40,
-                                fontWeight: FontWeight.w900,
-                                letterSpacing: 2,
-                                fontFeatures: [FontFeature.tabularFigures()],
-                              ),
-                            ),
-
-                            const SizedBox(height: 4),
-
-                            Text(
-                              'الصلاة الحالية: ${currentPrayer['name']} (${_formatTime12(prevTime)})',
-                              style: const TextStyle(color: Colors.white70, fontSize: 13),
-                            ),
-
-                            const SizedBox(height: 10),
-
-                            // شارة وقت النهي / الفضيلة
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
-                              decoration: BoxDecoration(
-                                color: isForbiddenTime
-                                    ? Colors.amber.withValues(alpha: 0.2)
-                                    : Colors.white.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(
-                                  color: isForbiddenTime ? Colors.amber : Colors.white30,
-                                ),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    Icons.info_outline_rounded,
-                                    size: 15,
-                                    color: isForbiddenTime ? Colors.amber : Colors.white70,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    isForbiddenTime ? 'وقت نهي عن النافلة المطلقة' : 'وقت فضيلة وأداء',
-                                    style: TextStyle(
-                                      color: isForbiddenTime ? Colors.amber : Colors.white,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-
-                            const SizedBox(height: 16),
-
-                            // شريط التقدم الزمني بين الصلاتين
-                            Stack(
-                              alignment: Alignment.center,
-                              children: [
-                                Container(
-                                  height: 4,
-                                  decoration: BoxDecoration(
-                                    color: Colors.white24,
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                ),
-                                Align(
-                                  alignment: Alignment.centerRight,
-                                  child: FractionallySizedBox(
-                                    widthFactor: progress,
-                                    child: Container(
-                                      height: 4,
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFF1ED788),
-                                        borderRadius: BorderRadius.circular(4),
+                                      'باقي على ${nextPrayer['name']}',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 20,
+                                        fontWeight: FontWeight.bold,
                                       ),
                                     ),
-                                  ),
-                                ),
-                                Align(
-                                  alignment: Alignment(1.0 - (progress * 2.0), 0),
-                                  child: Container(
-                                    width: 16,
-                                    height: 16,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF111916),
-                                      shape: BoxShape.circle,
-                                      border: Border.all(color: gold, width: 3),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-
-                            const SizedBox(height: 10),
-
-                            // أسماء وأوقات الصلاتين على طرفي الشريط
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
+                                    const SizedBox(height: 4),
                                     Text(
-                                      currentPrayer['name'],
-                                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                                      _formatCountdown(remaining),
+                                      style: const TextStyle(
+                                        color: Color(0xFF1ED788),
+                                        fontSize: 40,
+                                        fontWeight: FontWeight.w900,
+                                        letterSpacing: 2,
+                                        fontFeatures: [FontFeature.tabularFigures()],
+                                      ),
                                     ),
+                                    const SizedBox(height: 4),
                                     Text(
-                                      _formatTime12(prevTime),
-                                      style: const TextStyle(color: Colors.white70, fontSize: 12),
+                                      'الصلاة الحالية: ${currentPrayer['name']} (${_formatTime12(prevTime)})',
+                                      style: const TextStyle(color: Colors.white70, fontSize: 13),
+                                    ),
+                                    const SizedBox(height: 10),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                                      decoration: BoxDecoration(
+                                        color: isForbiddenTime
+                                            ? Colors.amber.withValues(alpha: 0.2)
+                                            : Colors.white.withValues(alpha: 0.1),
+                                        borderRadius: BorderRadius.circular(20),
+                                        border: Border.all(
+                                          color: isForbiddenTime ? Colors.amber : Colors.white30,
+                                        ),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            Icons.info_outline_rounded,
+                                            size: 15,
+                                            color: isForbiddenTime ? Colors.amber : Colors.white70,
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            isForbiddenTime ? 'وقت نهي عن النافلة المطلقة' : 'وقت فضيلة وأداء',
+                                            style: TextStyle(
+                                              color: isForbiddenTime ? Colors.amber : Colors.white,
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(height: 16),
+                                    Stack(
+                                      alignment: Alignment.center,
+                                      children: [
+                                        Container(
+                                          height: 4,
+                                          decoration: BoxDecoration(
+                                            color: Colors.white24,
+                                            borderRadius: BorderRadius.circular(4),
+                                          ),
+                                        ),
+                                        Align(
+                                          alignment: Alignment.centerRight,
+                                          child: FractionallySizedBox(
+                                            widthFactor: progress,
+                                            child: Container(
+                                              height: 4,
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFF1ED788),
+                                                borderRadius: BorderRadius.circular(4),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                        Align(
+                                          alignment: Alignment(1.0 - (progress * 2.0), 0),
+                                          child: Container(
+                                            width: 16,
+                                            height: 16,
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFF111916),
+                                              shape: BoxShape.circle,
+                                              border: Border.all(color: gold, width: 3),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 10),
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              currentPrayer['name'],
+                                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                                            ),
+                                            Text(
+                                              _formatTime12(prevTime),
+                                              style: const TextStyle(color: Colors.white70, fontSize: 12),
+                                            ),
+                                          ],
+                                        ),
+                                        Column(
+                                          crossAxisAlignment: CrossAxisAlignment.end,
+                                          children: [
+                                            Text(
+                                              nextPrayer['name'],
+                                              style: const TextStyle(color: Color(0xFF1ED788), fontWeight: FontWeight.bold, fontSize: 14),
+                                            ),
+                                            Text(
+                                              _formatTime12(nextTime),
+                                              style: const TextStyle(color: Colors.white, fontSize: 12),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
                                     ),
                                   ],
                                 ),
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.end,
+                              ),
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 14),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.45),
+                                  borderRadius: const BorderRadius.vertical(bottom: Radius.circular(22)),
+                                ),
+                                child: const Text(
+                                  'لا يجوز تأخير الصلاة عن وقتها إلا لعذر شرعي',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(color: Colors.white70, fontSize: 12),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Container(
+                          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                          decoration: BoxDecoration(
+                            color: cardBg,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: gold.withValues(alpha: 0.25)),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceAround,
+                            children: allPrayers.map((item) {
+                              final isNext = item['name'] == nextPrayer['name'];
+                              return Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: isNext ? emerald.withValues(alpha: 0.15) : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: isNext ? Border.all(color: emerald, width: 1.2) : null,
+                                ),
+                                child: Column(
                                   children: [
                                     Text(
-                                      nextPrayer['name'],
-                                      style: const TextStyle(color: Color(0xFF1ED788), fontWeight: FontWeight.bold, fontSize: 14),
+                                      item['name'],
+                                      style: TextStyle(
+                                        fontSize: 11.5,
+                                        fontWeight: isNext ? FontWeight.bold : FontWeight.w600,
+                                        color: isNext ? emerald : (isDark ? Colors.white70 : Colors.black87),
+                                      ),
                                     ),
+                                    const SizedBox(height: 4),
                                     Text(
-                                      _formatTime12(nextTime),
-                                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                                      _formatTime12(item['time'] as DateTime),
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold,
+                                        color: isNext ? emerald : (isDark ? Colors.white : const Color(0xFF1E2421)),
+                                      ),
                                     ),
                                   ],
                                 ),
-                              ],
-                            ),
-                          ],
+                              );
+                            }).toList(),
+                          ),
                         ),
-                      ),
-
-                      // الشريط السفلي للتنبيه الفقهي داخل البطاقة
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 14),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.45),
-                          borderRadius: const BorderRadius.vertical(bottom: Radius.circular(22)),
-                        ),
-                        child: const Text(
-                          'لا يجوز تأخير الصلاة عن وقتها إلا لعذر شرعي',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: Colors.white70, fontSize: 12),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 14),
-
-                // 5. شريط أوقات الصلوات الست (الفجر حتى العشاء)
-                Container(
-                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-                  decoration: BoxDecoration(
-                    color: cardBg,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: gold.withValues(alpha: 0.25)),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceAround,
-                    children: allPrayers.map((item) {
-                      final isNext = item['name'] == nextPrayer['name'];
-                      return Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: isNext ? emerald.withValues(alpha: 0.15) : Colors.transparent,
-                          borderRadius: BorderRadius.circular(10),
-                          border: isNext ? Border.all(color: emerald, width: 1.2) : null,
-                        ),
-                        child: Column(
-                          children: [
-                            Text(
-                              item['name'],
-                              style: TextStyle(
-                                fontSize: 11.5,
-                                fontWeight: isNext ? FontWeight.bold : FontWeight.w600,
-                                color: isNext ? emerald : (isDark ? Colors.white70 : Colors.black87),
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              _formatTime12(item['time'] as DateTime),
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                                color: isNext ? emerald : (isDark ? Colors.white : const Color(0xFF1E2421)),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    }).toList(),
+                      ],
+                    ),
                   ),
                 ),
               ],
