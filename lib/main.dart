@@ -2,12 +2,13 @@ import 'package:material_ui/material_ui.dart';
 import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter_localizations/flutter_localizations.dart' show GlobalWidgetsLocalizations;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'screens/home_screen.dart';
 import 'screens/surah_list_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
-  final isDark = prefs.getBool('is_dark_mode') ?? false; // الفاتح هو الافتراضي الآن
+  final isDark = prefs.getBool('is_dark_mode') ?? false;
   runApp(NoorQuranApp(initialDarkMode: isDark));
 }
 
@@ -15,6 +16,7 @@ class NoorQuranApp extends StatefulWidget {
   final bool initialDarkMode;
   const NoorQuranApp({super.key, this.initialDarkMode = false});
 
+  // ignore: library_private_types_in_public_api
   static _NoorQuranAppState? of(BuildContext context) =>
       context.findAncestorStateOfType<_NoorQuranAppState>();
 
@@ -53,14 +55,13 @@ class _NoorQuranAppState extends State<NoorQuranApp> {
       ],
       theme: ThemeData(
         useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFFFBF8F1),
+        scaffoldBackgroundColor: const Color(0xFFF6F3EA),
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF0D6E52),
+          seedColor: const Color(0xFF0C6E52),
           brightness: Brightness.light,
-          surface: const Color(0xFFFBF8F1),
         ),
         appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFF0D6E52),
+          backgroundColor: Color(0xFF0C6E52),
           foregroundColor: Colors.white,
         ),
       ),
@@ -70,7 +71,6 @@ class _NoorQuranAppState extends State<NoorQuranApp> {
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xFF1B8A68),
           brightness: Brightness.dark,
-          surface: const Color(0xFF121614),
         ),
       ),
       themeMode: _isDarkMode ? ThemeMode.dark : ThemeMode.light,
@@ -89,68 +89,69 @@ class MainNavigationScreen extends StatefulWidget {
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _selectedIndex = 0;
 
-  final List<Widget> _pages = const [
-    SurahListScreen(),
-    _PlaceholderTab(title: 'مواقيت الصلاة', icon: Icons.access_time_filled_rounded, subtitle: 'جاهز لربط الحساب الفلكي والأذان'),
-    _PlaceholderTab(title: 'اتجاه القبلة', icon: Icons.explore_rounded, subtitle: 'جاهز لربط مستشعر البوصلة'),
-    _PlaceholderTab(title: 'الأذكار والتسبيح', icon: Icons.favorite_rounded, subtitle: 'جاهز لربط حصن المسلم'),
-  ];
-
   @override
   Widget build(BuildContext context) {
-    final appState = NoorQuranApp.of(context);
-    final isDark = appState?.isDarkMode ?? false;
+    final List<Widget> pages = [
+      HomeScreen(onOpenMushafTab: () => setState(() => _selectedIndex = 2)),
+      const _SubScreenWrapper(title: 'الوسائط والتلاوات', child: _ComingSoon(title: 'المكتبة الصوتية والمرئية')),
+      const _SubScreenWrapper(title: 'المصحف الشريف', child: SurahListScreen()),
+      const _SubScreenWrapper(title: 'الديوان', child: _ComingSoon(title: 'الديوان والمقالات الشرعية')),
+      const _SubScreenWrapper(title: 'الأذكار والتسبيح', child: _ComingSoon(title: 'حصن المسلم والسبحة')),
+      const _SubScreenWrapper(title: 'البحث الشامل', child: _ComingSoon(title: 'البحث في آيات القرآن الكريم')),
+    ];
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('نور القرآن', style: TextStyle(fontWeight: FontWeight.bold)),
-        centerTitle: true,
-        actions: [
-          IconButton(
-            icon: Icon(isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded),
-            tooltip: isDark ? 'الوضع الفاتح' : 'الوضع الداكن',
-            onPressed: () => appState?.toggleTheme(),
-          ),
-        ],
-      ),
-      body: _pages[_selectedIndex],
+      body: pages[_selectedIndex],
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
         onDestinationSelected: (index) => setState(() => _selectedIndex = index),
+        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
         destinations: const [
-          NavigationDestination(icon: Icon(Icons.menu_book_outlined), selectedIcon: Icon(Icons.menu_book), label: 'المصحف'),
-          NavigationDestination(icon: Icon(Icons.mosque_outlined), selectedIcon: Icon(Icons.mosque), label: 'الصلاة'),
-          NavigationDestination(icon: Icon(Icons.explore_outlined), selectedIcon: Icon(Icons.explore), label: 'القبلة'),
-          NavigationDestination(icon: Icon(Icons.wb_sunny_outlined), selectedIcon: Icon(Icons.wb_sunny), label: 'الأذكار'),
+          NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home_rounded), label: 'الرئيسية'),
+          NavigationDestination(icon: Icon(Icons.play_circle_outline), selectedIcon: Icon(Icons.play_circle_fill), label: 'الوسائط'),
+          NavigationDestination(icon: Icon(Icons.menu_book_outlined), selectedIcon: Icon(Icons.menu_book_rounded), label: 'المصحف'),
+          NavigationDestination(icon: Icon(Icons.article_outlined), selectedIcon: Icon(Icons.article_rounded), label: 'الديوان'),
+          NavigationDestination(icon: Icon(Icons.favorite_border), selectedIcon: Icon(Icons.favorite), label: 'الأذكار'),
+          NavigationDestination(icon: Icon(Icons.search_outlined), selectedIcon: Icon(Icons.search_rounded), label: 'بحث'),
         ],
       ),
     );
   }
 }
 
-class _PlaceholderTab extends StatelessWidget {
+class _SubScreenWrapper extends StatelessWidget {
   final String title;
-  final IconData icon;
-  final String subtitle;
+  final Widget child;
+  const _SubScreenWrapper({required this.title, required this.child});
 
-  const _PlaceholderTab({required this.title, required this.icon, required this.subtitle});
+  @override
+  Widget build(BuildContext context) {
+    final appState = NoorQuranApp.of(context);
+    final isDark = appState?.isDarkMode ?? false;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+        centerTitle: true,
+        actions: [
+          IconButton(
+            icon: Icon(isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded),
+            onPressed: () => appState?.toggleTheme(),
+          ),
+        ],
+      ),
+      body: child,
+    );
+  }
+}
+
+class _ComingSoon extends StatelessWidget {
+  final String title;
+  const _ComingSoon({required this.title});
 
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 72, color: Theme.of(context).colorScheme.primary),
-            const SizedBox(height: 16),
-            Text(title, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            Text(subtitle, textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodyMedium),
-          ],
-        ),
-      ),
+      child: Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
     );
   }
 }
