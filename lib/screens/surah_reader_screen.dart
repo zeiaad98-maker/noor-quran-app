@@ -24,7 +24,7 @@ class SurahReaderScreen extends StatefulWidget {
 class _SurahReaderScreenState extends State<SurahReaderScreen> {
   late PageController _pageController;
   late int _currentPage;
-  bool _showControls = true;
+  bool _showControls = false; // يبدأ بملء الشاشة النقي، وبلمسة واحدة تظهر الأشرطة
   int? _bookmarkedPage;
 
   final AudioPlayer _audioPlayer = AudioPlayer();
@@ -52,6 +52,10 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
     _updateClock();
     _clockTimer = Timer.periodic(const Duration(seconds: 15), (_) => _updateClock());
 
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _precacheSurroundingPages(_currentPage);
+    });
+
     _audioPlayer.playerStateStream.listen((state) {
       if (!mounted) return;
       setState(() {
@@ -63,6 +67,25 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
         }
       });
     });
+  }
+
+  /// تحميل مسبق للصفحات المجاورة في الخلفية لجعل التقليب فورياً
+  void _precacheSurroundingPages(int centerPage) {
+    if (!mounted) return;
+    final pagesToPreload = [
+      centerPage + 1,
+      centerPage + 2,
+      centerPage + 3,
+      centerPage + 4,
+      centerPage + 5,
+      centerPage - 1,
+      centerPage - 2,
+    ];
+    for (final p in pagesToPreload) {
+      if (p >= 1 && p <= 604) {
+        precacheImage(CachedNetworkImageProvider(_getPageImageUrl(p)), context);
+      }
+    }
   }
 
   void _updateClock() {
@@ -123,8 +146,9 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
   }
 
   String _getPageImageUrl(int pageNumber) {
+    // دقة فائقة الحدة (1920px) لخط مجمع الملك فهد بالرسم العثماني
     final padded = pageNumber.toString().padLeft(3, '0');
-    return 'https://android.quran.com/data/width_1024/page$padded.png';
+    return 'https://android.quran.com/data/width_1920/page$padded.png';
   }
 
   Future<void> _toggleAudioPlay(int surahNum) async {
@@ -246,10 +270,12 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
               child: PageView.builder(
                 controller: _pageController,
                 itemCount: 604,
+                physics: const BouncingScrollPhysics(),
                 onPageChanged: (index) {
                   final newPage = index + 1;
                   setState(() => _currentPage = newPage);
                   _saveLastRead(newPage);
+                  _precacheSurroundingPages(newPage);
                 },
                 itemBuilder: (context, index) {
                   final pageNum = index + 1;
@@ -325,6 +351,8 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                               child: CachedNetworkImage(
                                 imageUrl: _getPageImageUrl(pageNum),
                                 fit: BoxFit.contain,
+                                filterQuality: FilterQuality.high,
+                                fadeInDuration: const Duration(milliseconds: 80),
                                 placeholder: (context, url) => const Center(
                                   child: CircularProgressIndicator(color: goldInk),
                                 ),

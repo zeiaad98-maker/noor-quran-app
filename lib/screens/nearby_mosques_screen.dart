@@ -25,6 +25,12 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
   String? _error;
   List<Map<String, dynamic>> _mosques = [];
 
+  final List<String> _overpassEndpoints = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+    'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+  ];
+
   @override
   void initState() {
     super.initState();
@@ -37,61 +43,81 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
       _error = null;
     });
 
-    try {
-      // البحث في دائرة نصف قطرها 3000 متر (3 كم) حول موقع المستخدم عبر OpenStreetMap
-      final query = '''
-[out:json][timeout:15];
+    final query = '''
+[out:json][timeout:12];
 (
-  node["amenity"="place_of_worship"]["religion"="muslim"](around:3000,${widget.lat},${widget.lng});
-  way["amenity"="place_of_worship"]["religion"="muslim"](around:3000,${widget.lat},${widget.lng});
+  nwr["amenity"="place_of_worship"]["religion"="muslim"](around:4000,${widget.lat},${widget.lng});
+  nwr["building"="mosque"](around:4000,${widget.lat},${widget.lng});
 );
 out center;
 ''';
-      final response = await http.post(
-        Uri.parse('https://overpass-api.de/api/interpreter'),
-        body: {'data': query},
-      );
 
-      if (response.statusCode != 200) {
-        throw Exception('تعذر الاتصال بخادم الخرائط');
+    for (final endpoint in _overpassEndpoints) {
+      try {
+        final response = await http
+            .post(
+              Uri.parse(endpoint),
+              headers: {
+                'User-Agent': 'NoorQuranApp/1.0 (Flutter Mobile App)',
+                'Content-Type': 'application/x-www-form-urlencoded',
+              },
+              body: {'data': query},
+            )
+            .timeout(const Duration(seconds: 12));
+
+        if (response.statusCode == 200) {
+          final data = json.decode(utf8.decode(response.bodyBytes));
+          final elements = (data['elements'] as List?) ?? [];
+
+          final List<Map<String, dynamic>> loaded = [];
+          final Set<String> seenCoords = {};
+
+          for (final el in elements) {
+            final double? mLat = (el['lat'] as num?)?.toDouble() ??
+                (el['center']?['lat'] as num?)?.toDouble();
+            final double? mLng = (el['lon'] as num?)?.toDouble() ??
+                (el['center']?['lon'] as num?)?.toDouble();
+            if (mLat == null || mLng == null) continue;
+
+            final coordKey = '${mLat.toStringAsFixed(4)}_${mLng.toStringAsFixed(4)}';
+            if (seenCoords.contains(coordKey)) continue;
+            seenCoords.add(coordKey);
+
+            final tags = (el['tags'] as Map?) ?? {};
+            final String name = tags['name:ar'] ?? tags['name'] ?? 'مسجد قريب';
+            final double distanceMeters = Geolocator.distanceBetween(
+              widget.lat,
+              widget.lng,
+              mLat,
+              mLng,
+            );
+
+            loaded.add({
+              'name': name,
+              'lat': mLat,
+              'lng': mLng,
+              'distance': distanceMeters,
+            });
+          }
+
+          loaded.sort((a, b) => (a['distance'] as double).compareTo(b['distance'] as double));
+
+          if (mounted) {
+            setState(() {
+              _mosques = loaded;
+              _isLoading = false;
+            });
+          }
+          return; // نجح الجلب من هذا الخادم
+        }
+      } catch (_) {
+        // الانتقال للخادم الاحتياطي التالي
       }
+    }
 
-      final data = json.decode(utf8.decode(response.bodyBytes));
-      final elements = (data['elements'] as List?) ?? [];
-
-      final List<Map<String, dynamic>> loaded = [];
-      for (final el in elements) {
-        final double? mLat = el['lat'] ?? el['center']?['lat'];
-        final double? mLng = el['lon'] ?? el['center']?['lon'];
-        if (mLat == null || mLng == null) continue;
-
-        final tags = (el['tags'] as Map?) ?? {};
-        final String name = tags['name:ar'] ?? tags['name'] ?? 'مسجد';
-        final double distanceMeters = Geolocator.distanceBetween(
-          widget.lat,
-          widget.lng,
-          mLat,
-          mLng,
-        );
-
-        loaded.add({
-          'name': name,
-          'lat': mLat,
-          'lng': mLng,
-          'distance': distanceMeters,
-        });
-      }
-
-      // ترتيب المساجد من الأقرب إلى الأبعد
-      loaded.sort((a, b) => (a['distance'] as double).compareTo(b['distance'] as double));
-
+    if (mounted) {
       setState(() {
-        _mosques = loaded;
-        _isLoading = false;
-      });
-    } catch (e) {
-      setState(() {
-        _error = 'تعذر جلب المساجد القريبة، تأكد من اتصال الإنترنت ثم أعد المحاولة.';
+        _error = 'تعذر الاتصال بخوادم الخرائط حالياً. يمكنك فتح المساجد مباشرة عبر خرائط Google.';
         _isLoading = false;
       });
     }
@@ -106,12 +132,15 @@ out center;
 
   Future<void> _openInMaps(double lat, double lng, String name) async {
     final uri = Uri.parse('https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=walking');
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } else {
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
       final fallback = Uri.parse('geo:$lat,$lng?q=$lat,$lng(${Uri.encodeComponent(name)})');
       await launchUrl(fallback, mode: LaunchMode.externalApplication);
     }
+  }
+
+  Future<void> _openAllMosquesInGoogleMaps() async {
+    final uri = Uri.parse('https://www.google.com/maps/search/مساجد/@${widget.lat},${widget.lng},15z');
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
   @override
@@ -124,6 +153,11 @@ out center;
         title: Text('المساجد القريبة (${widget.cityName})', style: const TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: true,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.map_outlined),
+            tooltip: 'عرض على خرائط Google',
+            onPressed: _openAllMosquesInGoogleMaps,
+          ),
           IconButton(
             icon: const Icon(Icons.refresh_rounded),
             onPressed: _fetchNearbyMosques,
@@ -157,12 +191,31 @@ out center;
                           icon: const Icon(Icons.refresh),
                           label: const Text('إعادة المحاولة'),
                         ),
+                        const SizedBox(height: 10),
+                        OutlinedButton.icon(
+                          onPressed: _openAllMosquesInGoogleMaps,
+                          icon: const Icon(Icons.map_rounded, color: emerald),
+                          label: const Text('البحث في خرائط Google مباشرة'),
+                        ),
                       ],
                     ),
                   ),
                 )
               : _mosques.isEmpty
-                  ? const Center(child: Text('لم يتم العثور على مساجد مسجلة في نطاق 3 كم'))
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Text('لم يتم العثور على مساجد مسجلة في نطاق 4 كم'),
+                          const SizedBox(height: 12),
+                          ElevatedButton.icon(
+                            onPressed: _openAllMosquesInGoogleMaps,
+                            icon: const Icon(Icons.map_rounded),
+                            label: const Text('فتح خرائط Google'),
+                          ),
+                        ],
+                      ),
+                    )
                   : ListView.separated(
                       padding: const EdgeInsets.all(14),
                       itemCount: _mosques.length,
