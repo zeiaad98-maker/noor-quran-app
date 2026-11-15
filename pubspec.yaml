@@ -1,7 +1,7 @@
 name: noor_quran
 description: تطبيق القرآن الكريم والخدمات الإسلامية المتكامل
 publish_to: 'none'
-version: 1.0.4+5
+version: 1.0.5+6
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -28,6 +28,8 @@ dependencies:
   path_provider: ^2.1.4
   http: ^1.2.2
   url_launcher: ^6.3.1
+  flutter_map: ^7.0.2
+  latlong2: ^0.9.1
 
 dev_dependencies:
   flutter_test:
