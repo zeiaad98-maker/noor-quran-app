@@ -44,7 +44,7 @@ jobs:
           keyAlias=noor_key
           storeFile=release.jks
           EOF
-          sed -i 's/signingConfig = signingConfigs.getByName("debug")/signingConfig = signingConfigs.create("release") {\n            val props = java.util.Properties()\n            props.load(java.io.FileInputStream(rootProject.file("key.properties")))\n            storeFile = file(props["storeFile"]!!)\n            storePassword = props["storePassword"] as String\n            keyAlias = props["keyAlias"] as String\n            keyPassword = props["keyPassword"] as String\n        }/' android/app/build.gradle.kts || true
+          sed -i 's/signingConfig = signingConfigs.getByName("debug")/signingConfig = signingConfigs.create("release") {\n            storeFile = file("release.jks")\n            storePassword = "noor123456"\n            keyAlias = "noor_key"\n            keyPassword = "noor123456"\n        }/' android/app/build.gradle.kts || true
           sed -i 's/signingConfig signingConfigs.debug/signingConfig signingConfigs.release/' android/app/build.gradle || true
 
       - name: Install dependencies
