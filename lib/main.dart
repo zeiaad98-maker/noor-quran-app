@@ -4,6 +4,7 @@ import 'package:flutter_localizations/flutter_localizations.dart' show GlobalWid
 import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/home_screen.dart';
 import 'screens/surah_list_screen.dart';
+import 'screens/adhkar_tasbeeh_screen.dart';
 import 'widgets/quran_search_sheet.dart';
 
 void main() async {
@@ -95,7 +96,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     final List<Widget> pages = [
       HomeScreen(onOpenMushafTab: () => setState(() => _selectedIndex = 1)),
       const _SubScreenWrapper(title: 'المصحف الشريف', child: SurahListScreen()),
-      const _SubScreenWrapper(title: 'الأذكار والتسبيح', child: _ComingSoon(title: 'حصن المسلم والسبحة')),
+      const _SubScreenWrapper(title: 'الأذكار والتسبيح', child: AdhkarTasbeehScreen()),
       const _SubScreenWrapper(title: 'البحث في القرآن الكريم', child: QuranSearchView()),
     ];
 
@@ -137,18 +138,6 @@ class _SubScreenWrapper extends StatelessWidget {
         ],
       ),
       body: child,
-    );
-  }
-}
-
-class _ComingSoon extends StatelessWidget {
-  final String title;
-  const _ComingSoon({required this.title});
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
     );
   }
 }
