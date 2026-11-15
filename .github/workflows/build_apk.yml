@@ -27,9 +27,9 @@ jobs:
       - name: Generate Android Platform Files
         run: flutter create --platforms=android --org com.noor.quran --project-name noor_quran .
 
-      - name: Inject Location Permissions
+      - name: Inject Android Permissions
         run: |
-          sed -i 's/<application/<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" \/>\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" \/>\n    <application/' android/app/src/main/AndroidManifest.xml
+          sed -i 's/<application/<uses-permission android:name="android.permission.INTERNET" \/>\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" \/>\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" \/>\n    <application/' android/app/src/main/AndroidManifest.xml
 
       - name: Install dependencies
         run: flutter pub get
