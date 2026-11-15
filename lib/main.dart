@@ -4,6 +4,7 @@ import 'package:flutter_localizations/flutter_localizations.dart' show GlobalWid
 import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/home_screen.dart';
 import 'screens/surah_list_screen.dart';
+import 'widgets/quran_search_sheet.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -95,7 +96,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       HomeScreen(onOpenMushafTab: () => setState(() => _selectedIndex = 1)),
       const _SubScreenWrapper(title: 'المصحف الشريف', child: SurahListScreen()),
       const _SubScreenWrapper(title: 'الأذكار والتسبيح', child: _ComingSoon(title: 'حصن المسلم والسبحة')),
-      const _SubScreenWrapper(title: 'البحث الشامل', child: _ComingSoon(title: 'البحث في آيات القرآن الكريم')),
+      const _SubScreenWrapper(title: 'البحث في القرآن الكريم', child: QuranSearchView()),
     ];
 
     return Scaffold(
