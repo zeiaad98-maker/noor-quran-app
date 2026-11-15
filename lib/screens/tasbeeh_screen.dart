@@ -56,13 +56,13 @@ class _TasbeehScreenState extends State<TasbeehScreen> {
     if (_vibrate) {
       if (_counter == _target) {
         // اهتزاز طويل عند الوصول للهدف
-        if (await Vibration.hasVibrator() ?? false) {
+        if (await Vibration.hasVibrator()) {
           Vibration.vibrate(duration: 500);
         }
         setState(() => _counter = 0); // إعادة التصفير تلقائياً بعد بلوغ الهدف
       } else {
         // اهتزاز خفيف لكل ضغطة
-        if (await Vibration.hasVibrator() ?? false) {
+        if (await Vibration.hasVibrator()) {
           Vibration.vibrate(duration: 50, amplitude: 50);
         }
       }
