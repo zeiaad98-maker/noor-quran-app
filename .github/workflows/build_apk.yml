@@ -34,6 +34,11 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Patch geocoding compileSdk
+        run: |
+          sed -i 's/compileSdk 33/compileSdk 34/' ~/.pub-cache/hosted/pub.dev/geocoding_android-*/android/build.gradle
+          grep -h "compileSdk" ~/.pub-cache/hosted/pub.dev/geocoding_android-*/android/build.gradle
+
       - name: Analyze code
         run: flutter analyze
 
