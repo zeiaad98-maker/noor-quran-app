@@ -13,6 +13,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import '../main.dart';
 import 'surah_reader_screen.dart';
+import 'nearby_mosques_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final VoidCallback onOpenMushafTab;
@@ -26,7 +27,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _timer;
   DateTime _now = DateTime.now();
 
-  // مفاتيح التقاط الصور للبطاقات
   final GlobalKey _calendarCardKey = GlobalKey();
   final GlobalKey _prayerCardKey = GlobalKey();
   bool _isCapturingImage = false;
@@ -37,6 +37,15 @@ class _HomeScreenState extends State<HomeScreen> {
   String _country = 'سوريا';
   bool _isLocating = false;
 
+  // إعدادات دقة المواقيت ومعايرة الدقائق لكل صلاة
+  String _calcMethodKey = 'auto';
+  int _fajrOffset = 0;
+  int _sunriseOffset = 0;
+  int _dhuhrOffset = 0;
+  int _asrOffset = 0;
+  int _maghribOffset = 0;
+  int _ishaOffset = 0;
+
   late PrayerTimes _prayerTimes;
   int? _lastSurah;
   int? _lastPage;
@@ -45,7 +54,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _recalculatePrayers();
-    _loadSavedLocationAndBookmark();
+    _loadSavedSettings();
     _detectLocationAutomatically();
 
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -66,24 +75,193 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
+  CalculationParameters _resolveCalculationParams() {
+    CalculationParameters params;
+    final key = _calcMethodKey == 'auto' ? _detectMethodByCountry(_country) : _calcMethodKey;
+
+    switch (key) {
+      case 'syria_levant':
+        // التقويم المعتمد في سوريا وبلاد الشام (فجر 18 درجة، عشاء 17.5 درجة)
+        params = CalculationParameters(fajrAngle: 18.0, ishaAngle: 17.5);
+        break;
+      case 'umm_al_qura':
+        params = CalculationMethod.umm_al_qura.getParameters();
+        break;
+      case 'egyptian':
+        params = CalculationMethod.egyptian.getParameters();
+        break;
+      case 'turkey':
+        params = CalculationMethod.turkey.getParameters();
+        break;
+      case 'karachi':
+        params = CalculationMethod.karachi.getParameters();
+        break;
+      default:
+        params = CalculationMethod.muslim_world_league.getParameters();
+    }
+
+    params.madhab = Madhab.shafi;
+    params.adjustments.fajr = _fajrOffset;
+    params.adjustments.sunrise = _sunriseOffset;
+    params.adjustments.dhuhr = _dhuhrOffset;
+    params.adjustments.asr = _asrOffset;
+    params.adjustments.maghrib = _maghribOffset;
+    params.adjustments.isha = _ishaOffset;
+    return params;
+  }
+
+  String _detectMethodByCountry(String country) {
+    final c = country.toLowerCase();
+    if (c.contains('سوريا') || c.contains('syria') || c.contains('لبنان') || c.contains('الأردن') || c.contains('فلسطين')) {
+      return 'syria_levant';
+    }
+    if (c.contains('السعودية') || c.contains('saudi') || c.contains('الإمارات') || c.contains('قطر') || c.contains('الكويت')) {
+      return 'umm_al_qura';
+    }
+    if (c.contains('مصر') || c.contains('egypt')) {
+      return 'egyptian';
+    }
+    if (c.contains('تركيا') || c.contains('turkey')) {
+      return 'turkey';
+    }
+    return 'mwl';
+  }
+
   void _recalculatePrayers() {
     final coordinates = Coordinates(_lat, _lng);
-    final params = CalculationMethod.muslim_world_league.getParameters();
-    params.madhab = Madhab.shafi;
+    final params = _resolveCalculationParams();
     _prayerTimes = PrayerTimes.today(coordinates, params);
   }
 
-  Future<void> _loadSavedLocationAndBookmark() async {
+  Future<void> _loadSavedSettings() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
       _lat = prefs.getDouble('saved_lat') ?? _lat;
       _lng = prefs.getDouble('saved_lng') ?? _lng;
       _city = prefs.getString('saved_city') ?? _city;
       _country = prefs.getString('saved_country') ?? _country;
+      _calcMethodKey = prefs.getString('calc_method') ?? 'auto';
+      _fajrOffset = prefs.getInt('offset_fajr') ?? 0;
+      _sunriseOffset = prefs.getInt('offset_sunrise') ?? 0;
+      _dhuhrOffset = prefs.getInt('offset_dhuhr') ?? 0;
+      _asrOffset = prefs.getInt('offset_asr') ?? 0;
+      _maghribOffset = prefs.getInt('offset_maghrib') ?? 0;
+      _ishaOffset = prefs.getInt('offset_isha') ?? 0;
       _lastSurah = prefs.getInt('last_surah');
       _lastPage = prefs.getInt('last_page');
       _recalculatePrayers();
     });
+  }
+
+  Future<void> _savePrayerCalibration() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('calc_method', _calcMethodKey);
+    await prefs.setInt('offset_fajr', _fajrOffset);
+    await prefs.setInt('offset_sunrise', _sunriseOffset);
+    await prefs.setInt('offset_dhuhr', _dhuhrOffset);
+    await prefs.setInt('offset_asr', _asrOffset);
+    await prefs.setInt('offset_maghrib', _maghribOffset);
+    await prefs.setInt('offset_isha', _ishaOffset);
+    setState(() => _recalculatePrayers());
+  }
+
+  void _showPrayerCalibrationSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            Widget offsetRow(String label, int val, void Function(int) onChange) {
+              return Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(label, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+                  Row(
+                    children: [
+                      IconButton.outlined(
+                        icon: const Icon(Icons.remove, size: 18),
+                        onPressed: () {
+                          onChange(val - 1);
+                          setModalState(() {});
+                          _savePrayerCalibration();
+                        },
+                      ),
+                      SizedBox(
+                        width: 48,
+                        child: Text(
+                          val == 0 ? '0 د' : (val > 0 ? '+$val د' : '$val د'),
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                      IconButton.outlined(
+                        icon: const Icon(Icons.add, size: 18),
+                        onPressed: () {
+                          onChange(val + 1);
+                          setModalState(() {});
+                          _savePrayerCalibration();
+                        },
+                      ),
+                    ],
+                  ),
+                ],
+              );
+            }
+
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Text(
+                      'ضبط دقة أوقات الصلاة',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      initialValue: _calcMethodKey,
+                      decoration: const InputDecoration(
+                        labelText: 'طريقة الحساب الفلكي',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: 'auto', child: Text('تلقائي حسب دولتك (موصى به)')),
+                        DropdownMenuItem(value: 'syria_levant', child: Text('تقويم سوريا وبلاد الشام (18° / 17.5°)')),
+                        DropdownMenuItem(value: 'umm_al_qura', child: Text('تقويم أم القرى (مكة المكرمة)')),
+                        DropdownMenuItem(value: 'egyptian', child: Text('الهيئة المصرية العامة للمساحة')),
+                        DropdownMenuItem(value: 'turkey', child: Text('رئاسة الشؤون الدينية التركية')),
+                        DropdownMenuItem(value: 'mwl', child: Text('رابطة العالم الإسلامي')),
+                      ],
+                      onChanged: (v) {
+                        if (v != null) {
+                          _calcMethodKey = v;
+                          setModalState(() {});
+                          _savePrayerCalibration();
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    const Text('التعديل اليدوي بالدقائق لمطابقة المسجد المحلي:', style: TextStyle(fontSize: 13, color: Colors.grey)),
+                    const SizedBox(height: 6),
+                    offsetRow('الفجر', _fajrOffset, (v) => _fajrOffset = v),
+                    offsetRow('الشروق', _sunriseOffset, (v) => _sunriseOffset = v),
+                    offsetRow('الظهر', _dhuhrOffset, (v) => _dhuhrOffset = v),
+                    offsetRow('العصر', _asrOffset, (v) => _asrOffset = v),
+                    offsetRow('المغرب', _maghribOffset, (v) => _maghribOffset = v),
+                    offsetRow('العشاء', _ishaOffset, (v) => _ishaOffset = v),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   Future<void> _detectLocationAutomatically() async {
@@ -101,7 +279,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (permission == LocationPermission.deniedForever) return;
 
       final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium),
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
       );
 
       String newCity = _city;
@@ -191,10 +369,8 @@ class _HomeScreenState extends State<HomeScreen> {
     return months[(month - 1).clamp(0, 11)];
   }
 
-  /// التقاط البطاقة وتحويلها إلى ملف صورة PNG ثم مشاركتها
   Future<void> _captureAndShareWidget(GlobalKey key, String fileName, String caption) async {
     setState(() => _isCapturingImage = true);
-    // انتظار فريم واحد لإخفاء زر المشاركة الصغير قبل التقاط الصورة
     await Future.delayed(const Duration(milliseconds: 60));
     try {
       final boundary = key.currentContext?.findRenderObject() as RenderRepaintBoundary?;
@@ -211,11 +387,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
       await Share.shareXFiles([XFile(file.path)], text: caption);
     } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تعذر إنشاء الصورة، جرب المشاركة كنص')),
-        );
-      }
     } finally {
       if (mounted) setState(() => _isCapturingImage = false);
     }
@@ -395,19 +566,21 @@ class _HomeScreenState extends State<HomeScreen> {
                     const SizedBox(width: 6),
                     const Icon(Icons.auto_awesome, color: gold, size: 18),
                     const Spacer(),
+                    // زر المساجد القريبة السريع
                     _circleIconBtn(
-                      icon: Icons.notifications_none_rounded,
+                      icon: Icons.mosque_rounded,
                       bg: isDark ? const Color(0xFF232A27) : const Color(0xFFEBE6D8),
-                      fg: isDark ? Colors.white : const Color(0xFF2B332F),
-                      onTap: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('تنبيهات الأذان مفعّلة تلقائياً حسب موقعك')),
-                        );
-                      },
+                      fg: emerald,
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => NearbyMosquesScreen(lat: _lat, lng: _lng, cityName: _city),
+                        ),
+                      ),
                     ),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 8),
                     _circleIconBtn(
-                      icon: isDark ? Icons.light_mode_rounded : Icons.settings_outlined,
+                      icon: isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
                       bg: emerald,
                       fg: Colors.white,
                       onTap: () => appState?.toggleTheme(),
@@ -421,7 +594,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // البطاقة اليمنى: التقويم الآلي (قابلة للالتقاط كصورة)
                     Expanded(
                       child: RepaintBoundary(
                         key: _calendarCardKey,
@@ -520,10 +692,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                     ),
-
                     const SizedBox(width: 12),
-
-                    // البطاقة اليسرى: الأذكار + الختمة
                     Expanded(
                       child: Container(
                         height: 172,
@@ -649,20 +818,28 @@ class _HomeScreenState extends State<HomeScreen> {
 
                 const SizedBox(height: 16),
 
-                // 3. شريط أوقات الصلاة + الموقع + زر المشاركة (صورة أو نص)
+                // 3. شريط أوقات الصلاة + زر الضبط الدقيق + الموقع + زر المشاركة
                 Row(
                   children: [
                     Container(width: 3.5, height: 20, decoration: BoxDecoration(color: gold, borderRadius: BorderRadius.circular(2))),
                     const SizedBox(width: 8),
-                    Text(
-                      'أوقات الصلاة',
-                      style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.bold,
-                        color: isDark ? Colors.white : const Color(0xFF1E2421),
+                    InkWell(
+                      onTap: _showPrayerCalibrationSheet,
+                      child: Row(
+                        children: [
+                          Text(
+                            'أوقات الصلاة',
+                            style: TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.bold,
+                              color: isDark ? Colors.white : const Color(0xFF1E2421),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          const Icon(Icons.tune_rounded, color: gold, size: 18),
+                        ],
                       ),
                     ),
-                    const Icon(Icons.chevron_right_rounded, color: gold, size: 20),
                     const Spacer(),
                     InkWell(
                       onTap: _detectLocationAutomatically,
@@ -711,7 +888,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
                 const SizedBox(height: 12),
 
-                // 4 & 5. البطاقة الكبرى + جدول الصلوات الست (مغلفة معاً للالتقاط كصورة واحدة متكاملة)
+                // 4 & 5. البطاقة الكبرى + جدول الصلوات الست
                 RepaintBoundary(
                   key: _prayerCardKey,
                   child: Container(
@@ -973,6 +1150,33 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         ),
                       ],
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 14),
+
+                // 6. بطاقة المساجد القريبة التفاعلية
+                Card(
+                  color: cardBg,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: BorderSide(color: gold.withValues(alpha: 0.3)),
+                  ),
+                  child: ListTile(
+                    leading: const CircleAvatar(
+                      backgroundColor: emerald,
+                      child: Icon(Icons.mosque_rounded, color: Colors.white),
+                    ),
+                    title: const Text('المساجد القريبة منك', style: TextStyle(fontWeight: FontWeight.bold)),
+                    subtitle: Text('عرض أقرب المساجد في $_city والاتجاه إليها'),
+                    trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16, color: gold),
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => NearbyMosquesScreen(lat: _lat, lng: _lng, cityName: _city),
+                      ),
                     ),
                   ),
                 ),
