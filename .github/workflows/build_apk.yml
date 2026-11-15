@@ -35,7 +35,8 @@ jobs:
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
-          echo "$KEYSTORE_BASE64" | base64 -d > android/app/release.jks
+          printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > android/app/release.jks
+          ls -l android/app/release.jks
           cat << 'EOF' > android/key.properties
           storePassword=noor123456
           keyPassword=noor123456
