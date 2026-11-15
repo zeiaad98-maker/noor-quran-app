@@ -5,6 +5,7 @@ import 'package:just_audio/just_audio.dart';
 import 'package:quran/quran.dart' as quran;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
+import '../widgets/quran_search_sheet.dart';
 
 class SurahReaderScreen extends StatefulWidget {
   final int surahNumber;
@@ -26,7 +27,6 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
   bool _showControls = true;
   int? _bookmarkedPage;
 
-  // مشغل الصوت والقراء
   final AudioPlayer _audioPlayer = AudioPlayer();
   bool _isPlaying = false;
   bool _isLoadingAudio = false;
@@ -123,7 +123,6 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
   }
 
   String _getPageImageUrl(int pageNumber) {
-    // صور مصحف المدينة المطبوع (15 سطراً - مجمع الملك فهد) عالية الدقة
     final padded = pageNumber.toString().padLeft(3, '0');
     return 'https://android.quran.com/data/width_1024/page$padded.png';
   }
@@ -186,31 +185,42 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
     );
   }
 
-  void _showJumpToPageDialog() {
-    final controller = TextEditingController();
-    showDialog(
+  void _openInMushafSearch() {
+    showModalBottomSheet(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('الانتقال إلى صفحة'),
-        content: TextField(
-          controller: controller,
-          keyboardType: TextInputType.number,
-          decoration: const InputDecoration(hintText: 'أدخل رقم الصفحة (1 - 604)'),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
-          ElevatedButton(
-            onPressed: () {
-              final p = int.tryParse(controller.text);
-              if (p != null && p >= 1 && p <= 604) {
-                Navigator.pop(ctx);
-                _pageController.jumpToPage(p - 1);
-              }
-            },
-            child: const Text('انتقال'),
+      isScrollControlled: true,
+      useSafeArea: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+      builder: (ctx) {
+        return SizedBox(
+          height: MediaQuery.of(context).size.height * 0.85,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('البحث في آيات المصحف', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded),
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: QuranSearchView(
+                  onSelectPage: (page) {
+                    Navigator.pop(ctx);
+                    _pageController.jumpToPage(page - 1);
+                  },
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -231,7 +241,6 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
       body: SafeArea(
         child: Stack(
           children: [
-            // 1. محتوى صفحة المصحف الكاملة (15 سطراً مطابقة لمصحف المدينة)
             GestureDetector(
               onTap: () => setState(() => _showControls = !_showControls),
               child: PageView.builder(
@@ -252,14 +261,12 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
 
                   return Column(
                     children: [
-                      // الترويسة العلوية الدقيقة المطابقة للصورة الثانية (تظهر في الصفحات من 3 إلى 604)
                       if (!isFirstTwoPages)
                         Padding(
                           padding: const EdgeInsets.fromLTRB(16, 8, 16, 2),
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              // يمين: رقم السورة واسمها وعدد آياتها
                               Container(
                                 padding: const EdgeInsets.only(bottom: 2),
                                 decoration: const BoxDecoration(
@@ -274,7 +281,6 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                                   ),
                                 ),
                               ),
-                              // وسط: رقم الصفحة
                               Text(
                                 _toArabicDigits('$pageNum'),
                                 style: TextStyle(
@@ -283,7 +289,6 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                                   color: isDark ? Colors.white70 : goldInk,
                                 ),
                               ),
-                              // يسار: رقم الجزء
                               Container(
                                 padding: const EdgeInsets.only(bottom: 2),
                                 decoration: const BoxDecoration(
@@ -301,8 +306,6 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                             ],
                           ),
                         ),
-
-                      // صورة صفحة مصحف المدينة الأصلية (15 سطراً)
                       Expanded(
                         child: Padding(
                           padding: EdgeInsets.symmetric(
@@ -348,7 +351,6 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
               ),
             ),
 
-            // 2. الشريط العلوي العائم (مطابق للصورة الأولى: إغلاق X + صفحة يمنى/يسرى + بحث + فهرس)
             if (_showControls)
               Positioned(
                 top: 0,
@@ -364,7 +366,6 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                   ),
                   child: Row(
                     children: [
-                      // يسار في الواجهة العربية (يظهر يميناً أو يساراً حسب الاتجاه): زر الإغلاق X
                       IconButton(
                         icon: const Icon(Icons.close_rounded, color: goldInk, size: 26),
                         onPressed: () => Navigator.pop(context),
@@ -392,8 +393,8 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                       const Spacer(),
                       IconButton(
                         icon: const Icon(Icons.search_rounded, color: goldInk, size: 24),
-                        tooltip: 'الانتقال لصفحة',
-                        onPressed: _showJumpToPageDialog,
+                        tooltip: 'البحث عن آية أو كلمة',
+                        onPressed: _openInMushafSearch,
                       ),
                       IconButton(
                         icon: const Icon(Icons.format_list_bulleted_rounded, color: goldInk, size: 24),
@@ -405,7 +406,6 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                 ),
               ),
 
-            // 3. الشريط السفلي العائم (مطابق للصورة الأولى: علامة مرجعية + زر تشغيل + اسم القارئ + إعدادات)
             if (_showControls)
               Positioned(
                 bottom: 0,
@@ -421,7 +421,6 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                   ),
                   child: Row(
                     children: [
-                      // زر العلامة المرجعية (Bookmark)
                       IconButton(
                         icon: Icon(
                           _bookmarkedPage == _currentPage
@@ -433,7 +432,6 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                         onPressed: _toggleBookmark,
                       ),
                       const SizedBox(width: 8),
-                      // زر التشغيل الدائري
                       InkWell(
                         onTap: () => _toggleAudioPlay(currentSurah),
                         borderRadius: BorderRadius.circular(24),
@@ -457,7 +455,6 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                         ),
                       ),
                       const SizedBox(width: 10),
-                      // اسم القارئ مع سهم الاختيار
                       Expanded(
                         child: InkWell(
                           onTap: _pickReciter,
@@ -481,7 +478,6 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                           ),
                         ),
                       ),
-                      // زر تبديل الوضع الفاتح/الداكن
                       IconButton(
                         icon: Icon(
                           isDark ? Icons.light_mode_rounded : Icons.tune_rounded,
