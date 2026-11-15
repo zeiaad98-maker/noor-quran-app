@@ -92,10 +92,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   @override
   Widget build(BuildContext context) {
     final List<Widget> pages = [
-      HomeScreen(onOpenMushafTab: () => setState(() => _selectedIndex = 2)),
-      const _SubScreenWrapper(title: 'الوسائط والتلاوات', child: _ComingSoon(title: 'المكتبة الصوتية والمرئية')),
+      HomeScreen(onOpenMushafTab: () => setState(() => _selectedIndex = 1)),
       const _SubScreenWrapper(title: 'المصحف الشريف', child: SurahListScreen()),
-      const _SubScreenWrapper(title: 'الديوان', child: _ComingSoon(title: 'الديوان والمقالات الشرعية')),
       const _SubScreenWrapper(title: 'الأذكار والتسبيح', child: _ComingSoon(title: 'حصن المسلم والسبحة')),
       const _SubScreenWrapper(title: 'البحث الشامل', child: _ComingSoon(title: 'البحث في آيات القرآن الكريم')),
     ];
@@ -108,9 +106,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
         destinations: const [
           NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home_rounded), label: 'الرئيسية'),
-          NavigationDestination(icon: Icon(Icons.play_circle_outline), selectedIcon: Icon(Icons.play_circle_fill), label: 'الوسائط'),
           NavigationDestination(icon: Icon(Icons.menu_book_outlined), selectedIcon: Icon(Icons.menu_book_rounded), label: 'المصحف'),
-          NavigationDestination(icon: Icon(Icons.article_outlined), selectedIcon: Icon(Icons.article_rounded), label: 'الديوان'),
           NavigationDestination(icon: Icon(Icons.favorite_border), selectedIcon: Icon(Icons.favorite), label: 'الأذكار'),
           NavigationDestination(icon: Icon(Icons.search_outlined), selectedIcon: Icon(Icons.search_rounded), label: 'بحث'),
         ],
