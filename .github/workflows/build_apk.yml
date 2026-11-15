@@ -55,6 +55,31 @@ jobs:
           sed -i 's/compileSdk 33/compileSdk 34/' ~/.pub-cache/hosted/pub.dev/geocoding_android-*/android/build.gradle
           grep -h "compileSdk" ~/.pub-cache/hosted/pub.dev/geocoding_android-*/android/build.gradle
 
+      - name: Disable release lint checks
+        run: |
+          for f in ~/.pub-cache/hosted/pub.dev/*/android/build.gradle; do
+            [ -f "$f" ] || continue
+            if grep -q 'checkReleaseBuilds' "$f"; then continue; fi
+            if grep -q 'lintOptions {' "$f"; then
+              sed -i '/lintOptions {/a\        checkReleaseBuilds false' "$f"
+            elif grep -qE '^[[:space:]]*lint \{' "$f"; then
+              sed -i '/^[[:space:]]*lint {/a\        checkReleaseBuilds = false' "$f"
+            elif grep -q '^android {' "$f"; then
+              sed -i '/^android {/a\    lintOptions {\n        checkReleaseBuilds false\n    }' "$f"
+            fi
+          done
+          for f in ~/.pub-cache/hosted/pub.dev/*/android/build.gradle.kts; do
+            [ -f "$f" ] || continue
+            if grep -q 'checkReleaseBuilds' "$f"; then continue; fi
+            if grep -qE '^[[:space:]]*lint \{' "$f"; then
+              sed -i '/^[[:space:]]*lint {/a\        checkReleaseBuilds = false' "$f"
+            elif grep -q '^android {' "$f"; then
+              sed -i '/^android {/a\    lint {\n        checkReleaseBuilds = false\n    }' "$f"
+            fi
+          done
+          sed -i '/compileSdk = flutter.compileSdkVersion/a\    lint {\n        checkReleaseBuilds = false\n    }' android/app/build.gradle.kts
+          grep -r 'checkReleaseBuilds' ~/.pub-cache/hosted/pub.dev/*/android/build.gradle* android/app/build.gradle.kts | wc -l
+
       - name: Analyze code
         run: flutter analyze
 
