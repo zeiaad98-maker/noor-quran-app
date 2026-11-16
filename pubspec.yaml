@@ -1,7 +1,7 @@
 name: noor_quran
 description: تطبيق القرآن الكريم والخدمات الإسلامية المتكامل
 publish_to: 'none'
-version: 1.0.9+10
+version: 1.0.10+11
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -50,13 +50,15 @@ flutter:
   uses-material-design: true
   assets:
     - assets/quran_data/word_meanings.json
+    - assets/quran_data/word_lexicon.json
     - assets/quran_data/tafsir_muyassar.json
     - assets/quran_data/word_morphology.json
     - assets/quran_data/word_segments_husary.json
     - assets/quran_data/hizb_quarters.json
     - assets/quran_data/surah_info.json
     - assets/quran_data/asbab_nuzul.json
-    - assets/quran_data/surah_sciences_sample.json
+    - assets/quran_data/surah_sciences.json
+    - assets/quran_data/syria_mosques.json
     - assets/surah_names/
 
   fonts:
