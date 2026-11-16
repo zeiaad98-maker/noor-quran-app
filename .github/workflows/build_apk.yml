@@ -24,12 +24,28 @@ jobs:
           flutter-version: '3.50.0'
           channel: 'stable'
 
+      - name: Install Android 37 Platform
+        run: |
+          SDKMGR="${ANDROID_HOME:-$ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          echo y | "$SDKMGR" "platforms;android-37"
+
       - name: Generate Android Platform Files
         run: flutter create --platforms=android --org com.noor.quran --project-name noor_quran .
 
-      - name: Inject Android Permissions
+      - name: Inject Android Permissions and Notification Receivers
         run: |
-          sed -i 's/<application/<uses-permission android:name="android.permission.INTERNET" \/>\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" \/>\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" \/>\n    <application/' android/app/src/main/AndroidManifest.xml
+          sed -i 's/<application/<uses-permission android:name="android.permission.INTERNET" \/>\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" \/>\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" \/>\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" \/>\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" \/>\n    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" \/>\n    <application/' android/app/src/main/AndroidManifest.xml
+          sed -i 's|</application>|    <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />\n    <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">\n        <intent-filter>\n            <action android:name="android.intent.action.BOOT_COMPLETED" />\n            <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />\n            <action android:name="android.intent.action.QUICKBOOT_POWERON" />\n            <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />\n        </intent-filter>\n    </receiver>\n  </application>|' android/app/src/main/AndroidManifest.xml
+          grep -c 'RECEIVE_BOOT_COMPLETED\|SCHEDULE_EXACT_ALARM\|ScheduledNotificationReceiver' android/app/src/main/AndroidManifest.xml
+
+      - name: Set compileSdk 37 and enable desugaring
+        run: |
+          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 37/' android/app/build.gradle.kts
+          grep -q 'compileSdk = 37' android/app/build.gradle.kts
+          sed -i '/compileOptions {/a\        isCoreLibraryDesugaringEnabled = true' android/app/build.gradle.kts
+          sed -i '/targetSdk = flutter.targetSdkVersion/a\        multiDexEnabled = true' android/app/build.gradle.kts
+          printf '\ndependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")\n}\n' >> android/app/build.gradle.kts
+          grep -n 'compileSdk\|isCoreLibraryDesugaringEnabled\|multiDexEnabled\|desugar_jdk_libs' android/app/build.gradle.kts
 
       - name: Configure Permanent Signing Keystore
         env:
@@ -77,7 +93,7 @@ jobs:
               sed -i '/^android {/a\    lint {\n        checkReleaseBuilds = false\n    }' "$f"
             fi
           done
-          sed -i '/compileSdk = flutter.compileSdkVersion/a\    lint {\n        checkReleaseBuilds = false\n    }' android/app/build.gradle.kts
+          sed -i '/compileSdk = 37/a\    lint {\n        checkReleaseBuilds = false\n    }' android/app/build.gradle.kts
           grep -r 'checkReleaseBuilds' ~/.pub-cache/hosted/pub.dev/*/android/build.gradle* android/app/build.gradle.kts | wc -l
 
       - name: Analyze code
