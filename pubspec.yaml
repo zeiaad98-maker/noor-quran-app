@@ -1,7 +1,7 @@
 name: noor_quran
 description: تطبيق القرآن الكريم والخدمات الإسلامية المتكامل
 publish_to: 'none'
-version: 1.0.6+7
+version: 1.0.7+8
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -34,6 +34,12 @@ dependencies:
   flutter_map: ^7.0.2
   latlong2: ^0.9.1
   vibration: ^3.1.8
+  wakelock_plus: ^1.5.2
+  fluttertoast: ^10.0.2
+  font_awesome_flutter: ^11.0.0
+  flutter_local_notifications: ^23.0.2
+  timezone: ^0.11.2
+  flutter_timezone: ^5.1.1
 
 dev_dependencies:
   flutter_test:
@@ -42,3 +48,17 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/quran_data/word_meanings.json
+    - assets/quran_data/tafsir_muyassar.json
+    - assets/quran_data/word_morphology.json
+    - assets/quran_data/hizb_quarters.json
+    - assets/surah_names/
+
+  fonts:
+    # Hafs Mushaf font (King Fahd Complex, Madinah) — Uthmani script,
+    # used for Quranic ayah text in search results, the ayah sheet
+    # and the audio player sheet. The reader itself stays QCF.
+    - family: Hafs
+      fonts:
+        - asset: assets/fonts/Hafs_18.ttf
