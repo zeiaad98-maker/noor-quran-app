@@ -2,6 +2,8 @@ import 'package:flutter/gestures.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:qcf_quran/qcf_quran.dart';
 
+import '../data/qcf_word_map.dart';
+
 /// Worst-case natural height of a 15-line Mushaf page at `h = 1.0`,
 /// for a screen whose calibrated font scale is [sp].
 ///
@@ -92,6 +94,18 @@ class NoorQcfPage extends StatelessWidget {
   /// Callback when a verse is tapped.
   final void Function(int surahNumber, int verseNumber)? onTap;
 
+  /// Callback when a single WORD is tapped (per-word popup).
+  ///
+  /// When set, each word of each verse gets its own recognizer
+  /// reporting (surah, verse, wordIndex) — the TRUE Uthmani word
+  /// index from [buildQcfWordMap], the same index the word audio
+  /// and the Quran.com segments use. The verse-end number glyph
+  /// keeps [onTap] (it opens the ayah sheet), so the two gestures
+  /// never conflict. When [onWordTap] is null, word taps fall back
+  /// to [onTap] (the old whole-verse behaviour).
+  final void Function(int surahNumber, int verseNumber, int wordIndex)?
+  onWordTap;
+
   /// Optional callback to customize verse background color dynamically.
   final Color? Function(int surahNumber, int verseNumber)?
   verseBackgroundColor;
@@ -108,6 +122,7 @@ class NoorQcfPage extends StatelessWidget {
     this.onLongPressCancel,
     this.onLongPressDown,
     this.onTap,
+    this.onWordTap,
     this.verseBackgroundColor,
   });
 
@@ -181,28 +196,75 @@ class NoorQcfPage extends StatelessWidget {
           }
         }
 
-        // Gesture Handling
-        GestureRecognizer? recognizer;
-        if (onTap != null) {
-          recognizer =
-              TapGestureRecognizer()..onTap = () => onTap?.call(surah, v);
-        } else if (onLongPress != null ||
-            onLongPressDown != null ||
-            onLongPressUp != null) {
-          final longPressRecognizer = LongPressGestureRecognizer();
-          longPressRecognizer.onLongPress = () => onLongPress?.call(surah, v);
-          longPressRecognizer.onLongPressStart =
-              (d) => onLongPressDown?.call(surah, v, d);
-          longPressRecognizer.onLongPressUp =
-              () => onLongPressUp?.call(surah, v);
-          longPressRecognizer.onLongPressEnd =
-              (d) => onLongPressCancel?.call(surah, v);
-          recognizer = longPressRecognizer;
+        // Per-word gestures (v10 — word popup).
+        //
+        // The verse text is one QCF glyph string: each code unit is
+        // one glyph (a word, or a pause mark) or a '\n' line break.
+        // [buildQcfWordMap] tells us which TRUE word each glyph
+        // belongs to, so we group consecutive glyphs of the same word
+        // into one TextSpan with its own recognizer. The character
+        // sequence is UNCHANGED (same glyphs, same '\n's, same style)
+        // — only the span boundaries move, so the line breaks and
+        // the 15-line layout are identical.
+        //
+        // * a word span: [onWordTap] (surah, verse, wordIndex) when
+        //   set; otherwise [onTap] (the old whole-verse tap); otherwise
+        //   the long-press recognizer as before.
+        // * the verse-end number glyph: [onTap] (opens the ayah
+        //   sheet) — tapping the ۝ number is the way to reach notes,
+        //   ayah audio and the rest of the ayah sheet.
+        // * '\n' line breaks: plain spans, no recognizer.
+        // * the hair space U+200A after the first glyph of the
+        //   page's first verse is kept exactly as before.
+        GestureRecognizer? wordRecognizer(int wordIndex) {
+          if (onWordTap != null) {
+            return TapGestureRecognizer()
+              ..onTap = () => onWordTap?.call(surah, v, wordIndex);
+          }
+          if (onTap != null) {
+            return TapGestureRecognizer()
+              ..onTap = () => onTap?.call(surah, v);
+          }
+          if (onLongPress != null ||
+              onLongPressDown != null ||
+              onLongPressUp != null) {
+            final r = LongPressGestureRecognizer();
+            r.onLongPress = () => onLongPress?.call(surah, v);
+            r.onLongPressStart =
+                (d) => onLongPressDown?.call(surah, v, d);
+            r.onLongPressUp = () => onLongPressUp?.call(surah, v);
+            r.onLongPressEnd = (d) => onLongPressCancel?.call(surah, v);
+            return r;
+          }
+          return null;
+        }
+
+        GestureRecognizer? numberRecognizer() {
+          if (onTap != null) {
+            return TapGestureRecognizer()
+              ..onTap = () => onTap?.call(surah, v);
+          }
+          if (onLongPress != null ||
+              onLongPressDown != null ||
+              onLongPressUp != null) {
+            final r = LongPressGestureRecognizer();
+            r.onLongPress = () => onLongPress?.call(surah, v);
+            r.onLongPressStart =
+                (d) => onLongPressDown?.call(surah, v, d);
+            r.onLongPressUp = () => onLongPressUp?.call(surah, v);
+            r.onLongPressEnd = (d) => onLongPressCancel?.call(surah, v);
+            return r;
+          }
+          return null;
         }
 
         final verseBgColor =
             theme.verseBackgroundColor?.call(surah, v) ??
             verseBackgroundColor?.call(surah, v);
+        final verseBgStyle =
+            verseBgColor != null
+                ? TextStyle(backgroundColor: verseBgColor)
+                : null;
 
         // Verse Number Logic
         InlineSpan verseNumberSpan;
@@ -215,6 +277,7 @@ class NoorQcfPage extends StatelessWidget {
         } else {
           verseNumberSpan = TextSpan(
             text: getVerseNumberQCF(surah, v),
+            recognizer: numberRecognizer(),
             style: TextStyle(
               fontFamily: pageFont,
               package: 'qcf_quran',
@@ -234,25 +297,54 @@ class NoorQcfPage extends StatelessWidget {
         final endsPrintedLine = fullVerse.endsWith('\n');
         final isLastVerseOfPage = surah == lastSurah && v == lastVerse;
         final verseText = getVerseQCF(surah, v, verseEndSymbol: false);
+        final wordMap = buildQcfWordMap(surah, v);
+        final isFirstVerseOnPage = v == ranges[0]['start'];
+        // Safe glyph→word lookup: for the single best-effort verse
+        // (13:10 — one glyph more than the text predicts) the extra
+        // glyph maps to the last word instead of crashing.
+        int glyphWord(int ordinal) =>
+            ordinal < wordMap.glyphToWord.length
+                ? wordMap.glyphToWord[ordinal]
+                : wordMap.wordCount - 1;
 
-        verseSpans.add(
-          TextSpan(
-            text:
-                v == ranges[0]['start']
-                    ? "${verseText.substring(0, 1)}\u200A${verseText.substring(1, verseText.length)}"
-                    : verseText,
-            recognizer: recognizer,
-            style:
-                verseBgColor != null
-                    ? TextStyle(backgroundColor: verseBgColor)
-                    : null,
-            children: [
-              verseNumberSpan,
-              if (endsPrintedLine && !isLastVerseOfPage)
-                const TextSpan(text: '\n'),
-            ],
-          ),
-        );
+        var glyphOrdinal = 0;
+        var isFirstGlyph = true;
+        var i = 0;
+        while (i < verseText.length) {
+          final c = verseText.codeUnitAt(i);
+          if (c == 10) {
+            // '\n' line break inside the verse: plain span.
+            verseSpans.add(const TextSpan(text: '\n'));
+            i++;
+            continue;
+          }
+          // One maximal run of glyphs belonging to the same word.
+          final wordIndex = glyphWord(glyphOrdinal);
+          final buf = StringBuffer();
+          while (i < verseText.length) {
+            final c2 = verseText.codeUnitAt(i);
+            if (c2 == 10) break;
+            if (glyphWord(glyphOrdinal) != wordIndex) break;
+            buf.writeCharCode(c2);
+            if (isFirstGlyph && isFirstVerseOnPage) {
+              buf.write('\u200A');
+            }
+            isFirstGlyph = false;
+            glyphOrdinal++;
+            i++;
+          }
+          verseSpans.add(
+            TextSpan(
+              text: buf.toString(),
+              recognizer: wordRecognizer(wordIndex),
+              style: verseBgStyle,
+            ),
+          );
+        }
+        verseSpans.add(verseNumberSpan);
+        if (endsPrintedLine && !isLastVerseOfPage) {
+          verseSpans.add(const TextSpan(text: '\n'));
+        }
       }
     }
 
@@ -361,6 +453,11 @@ class NoorQuranPageView extends StatefulWidget {
   /// Callback when a verse is tapped.
   final void Function(int surahNumber, int verseNumber)? onTap;
 
+  /// Callback when a single WORD is tapped (per-word popup).
+  /// Passed through to [NoorQcfPage.onWordTap].
+  final void Function(int surahNumber, int verseNumber, int wordIndex)?
+  onWordTap;
+
   /// Custom scroll physics for the PageView.
   final ScrollPhysics? physics;
 
@@ -375,6 +472,7 @@ class NoorQuranPageView extends StatefulWidget {
     this.theme,
     this.verseBackgroundColor,
     this.onTap,
+    this.onWordTap,
     this.physics,
   }) : assert(initialPageNumber >= 1 && initialPageNumber <= totalPagesCount);
 
@@ -428,6 +526,7 @@ class _NoorQuranPageViewState extends State<NoorQuranPageView> {
               fontSize: widget.fontSize,
               verseBackgroundColor: widget.verseBackgroundColor,
               onTap: widget.onTap,
+              onWordTap: widget.onWordTap,
               sp: widget.sp,
               h: widget.h,
               theme: effectiveTheme,

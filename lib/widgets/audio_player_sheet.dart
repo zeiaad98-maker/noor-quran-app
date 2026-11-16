@@ -74,6 +74,46 @@ class AudioPlayerSheet extends StatelessWidget {
                       style: GoogleFonts.amiri(fontSize: 12, color: Colors.grey),
                     ),
                   ),
+                // Playback errors surface HERE, inside the sheet: the
+                // old SnackBar-only error sat behind this modal sheet,
+                // so a failed word tap looked like nothing happening.
+                if (controller.lastError != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFDECEA),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                            color: Colors.red.withValues(alpha: 0.4)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.signal_wifi_off,
+                              size: 20, color: Colors.red),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              controller.lastError!,
+                              style: GoogleFonts.amiri(
+                                  fontSize: 14, color: Colors.red),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          TextButton(
+                            onPressed: controller.retryLastError,
+                            child: Text('إعادة المحاولة',
+                                style: GoogleFonts.amiri(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.bold,
+                                    color: _green)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 const SizedBox(height: 12),
                 _scopeTabs(textColor),
                 const SizedBox(height: 14),
