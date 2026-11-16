@@ -31,7 +31,7 @@ void main() {
     expect(count, 114);
   });
 
-  test('surah sciences sample: Fatiha + Baqarah only', () async {
+  test('surah sciences: all 114 surahs (Bug H)', () async {
     final fatiha = await SurahSciences.scienceForSurah(1);
     expect(fatiha, isNotNull);
     expect(fatiha!.names, contains('أم القرآن'));
@@ -44,10 +44,55 @@ void main() {
     expect(baqarah!.names, contains('الزهراء'));
     expect(baqarah.maqsadVerbatim, isNotNull);
     expect(baqarah.fadailHadith, contains('لا تجعلوا بيوتكم مقابر'));
+    // Bug H fix: the sample headline swallowed raw page text; it is now
+    // just the bullet text.
+    expect(baqarah.fadailHeadline,
+        'البيت الذي تقرأ فيه سورة البقرة لا يدخله الشيطان بل ينفر ويفر منه ويخرج إذا كان فيه');
 
-    // Any other surah: no extracted sample yet (honest null).
-    expect(await SurahSciences.scienceForSurah(3), isNull);
-    expect(await SurahSciences.scienceForSurah(114), isNull);
+    // Every surah now has an entry (no more "لم تستخرج" placeholder).
+    var withNames = 0;
+    var withMaqsad = 0;
+    var withFadail = 0;
+    for (var s = 1; s <= 114; s++) {
+      final sci = await SurahSciences.scienceForSurah(s);
+      expect(sci, isNotNull, reason: 'surah $s has no science entry');
+      if (sci!.names != null && sci.names!.isNotEmpty) withNames++;
+      if (sci.maqsadVerbatim != null && sci.maqsadVerbatim!.isNotEmpty) {
+        withMaqsad++;
+      }
+      if (sci.fadailHeadline != null && sci.fadailHeadline!.isNotEmpty) {
+        withFadail++;
+      }
+    }
+    expect(withNames, 41);
+    expect(withMaqsad, 114);
+    expect(withFadail, 114);
+
+    // Spot checks from the extraction.
+    final imran = await SurahSciences.scienceForSurah(3);
+    expect(imran!.names, contains('الزهراء'));
+    expect(imran.maqsadShort, 'التوحيد');
+
+    final tawbah = await SurahSciences.scienceForSurah(9);
+    expect(tawbah!.names, contains('الفاضحة'));
+    expect(tawbah.names, isNot(contains('الفاتحة')));
+
+    final qaf = await SurahSciences.scienceForSurah(50);
+    expect(qaf!.fadailHeadline, contains('يستحب قراءتها على المنبر'));
+
+    // A باب whose whole content is "لم يصح ... سوى أنها من المفصل".
+    final buruj = await SurahSciences.scienceForSurah(85);
+    expect(buruj!.fadailHeadline, contains('لم يصح'));
+
+    // A surah with no باب in the موسوعة carries the honest note.
+    final naml = await SurahSciences.scienceForSurah(27);
+    expect(naml!.fadailHeadline, contains('لم يفرد لها المؤلف باباً'));
+
+    // A surah where Baqa'i lists no other names carries the honest note.
+    final nas = await SurahSciences.scienceForSurah(114);
+    expect(nas!.names, isEmpty);
+    expect(nas.namesVerbatim, contains('لم يذكر البقاعي'));
+    expect(nas.maqsadShort, 'الاعتصام بالِإله الحق، من شر الخلق الباطن');
   });
 
   test('asbab al-nuzul: 2:97 found, ayah with none is empty', () async {
