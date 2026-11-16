@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:quran/quran.dart' as quran;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'audio_downloads.dart';
 import 'quran_audio.dart';
 import 'word_meanings.dart';
 
@@ -25,6 +27,12 @@ enum PlayerScope { word, ayah, page, surah }
 /// (one fixed voice) — never silently missing.
 class AudioPlayerController extends ChangeNotifier {
   final AudioPlayer _player = AudioPlayer();
+
+  /// Offline downloads (v12, optional): when a downloaded ayah file
+  /// exists for the current reciter, the player plays it instead of
+  /// streaming — same recording (everyayah), so word-segment timings
+  /// still apply. Null in tests / when downloads are not wired up.
+  final AudioDownloadService? downloads;
 
   int reciterIndex = 0;
   PlayerScope scope = PlayerScope.page;
@@ -77,6 +85,29 @@ class AudioPlayerController extends ChangeNotifier {
   // end (position listener) and the file end (state stream) can both
   // fire for the same item — the second must be ignored.
   int _finishedToken = -1;
+
+  /// Word-playback padding (v12 precision fix — the user's explicit
+  /// requirement: a tapped word must play EXACTLY and COMPLETELY).
+  /// The seek lands this far BEFORE the segment start so the first
+  /// letter is never cut by seek inaccuracy, and playback runs this
+  /// far PAST the segment end so the last letter finishes. Small
+  /// enough (120/150 ms) not to swallow a neighbouring word: Quran.com
+  /// segments leave a gap between words, and the padded end still
+  /// stops well before the next word starts in normal recitation.
+  static const int wordPadStartMs = 120;
+  static const int wordPadEndMs = 150;
+
+  /// Padded playback window for one word segment: (seekTo, end).
+  /// The start is clamped at zero (the first word of an ayah).
+  /// Pure, so it is pinned by unit tests.
+  static (Duration, Duration) paddedWordWindow(WordSegment seg) {
+    final startMs = seg.startMs - wordPadStartMs;
+    return (
+      Duration(milliseconds: startMs < 0 ? 0 : startMs),
+      Duration(milliseconds: seg.endMs + wordPadEndMs),
+    );
+  }
+
   bool _disposed = false;
 
   (int, int)? get currentAyah =>
@@ -84,7 +115,7 @@ class AudioPlayerController extends ChangeNotifier {
 
   Reciter get reciter => reciters[reciterIndex];
 
-  AudioPlayerController() {
+  AudioPlayerController({this.downloads}) {
     _player.playerStateStream.listen((state) {
       if (_disposed) return;
       final playing = state.playing;
@@ -364,15 +395,23 @@ class AudioPlayerController extends ChangeNotifier {
         await _playWordCurrent(token, ayah);
       } else {
         final url = everyayahUrl(reciter, ayah.$1, ayah.$2);
+        // Downloaded file first (offline), stream otherwise.
+        final local = downloads?.localAyahFile(reciter, ayah.$1, ayah.$2);
         if (token != _playToken || _disposed) return;
         await _player.stop();
         await _player.setLoopMode(LoopMode.off);
         // Bounded: the old bare setUrl could hang forever on a
         // stalled connection, leaving the spinner up with no sound
         // and no error.
-        await _player
-            .setUrl(url)
-            .timeout(const Duration(seconds: 20));
+        if (local != null) {
+          await _player
+              .setFilePath(local.path)
+              .timeout(const Duration(seconds: 20));
+        } else {
+          await _player
+              .setUrl(url)
+              .timeout(const Duration(seconds: 20));
+        }
         if (token != _playToken || _disposed) return;
         await _player.setSpeed(speed);
         await _player.play();
@@ -412,13 +451,23 @@ class AudioPlayerController extends ChangeNotifier {
       if (segments != null && word - 1 < segments.length) {
         wordCount = segments.length;
         final seg = segments[word - 1];
-        final seekTo = Duration(milliseconds: seg.startMs);
-        _wordEnd = Duration(milliseconds: seg.endMs);
+        // Padded window (v12): start slightly early, end slightly
+        // late — the word plays completely, never cut at either end,
+        // and never jumps to the ayah's beginning or end.
+        final (seekTo, wordEnd) = paddedWordWindow(seg);
+        _wordEnd = wordEnd;
         wordUsesWbw = false;
         if (token != _playToken || _disposed) return;
         await _player.stop();
         await _player.setLoopMode(LoopMode.off);
-        if (await _loadAndPlay(qcUrl, seekTo)) return;
+        // Downloaded file first (offline): same everyayah recording
+        // the segments were timed against. A corrupt local file
+        // falls through to streaming, then to wbw below.
+        var played = false;
+        final local = downloads?.localAyahFile(reciter, ayah.$1, ayah.$2);
+        if (local != null) played = await _loadLocal(local, seekTo);
+        if (!played) played = await _loadAndPlay(qcUrl, seekTo);
+        if (played) return;
         // Ayah file stalled: fall through to the wbw file below.
         // The seek/end state belongs to the ayah file — reset it so
         // the position listener cannot cut the wbw file short.
@@ -438,6 +487,21 @@ class AudioPlayerController extends ChangeNotifier {
       Duration.zero,
     );
     if (!ok) _reportError(_playCurrent);
+  }
+
+  /// Same as [_loadAndPlay] but for a downloaded local file
+  /// (setFilePath instead of setUrl). Returns false on any error so
+  /// the caller can fall back to streaming.
+  Future<bool> _loadLocal(File file, Duration seekTo) async {
+    try {
+      await _player.setFilePath(file.path).timeout(const Duration(seconds: 10));
+      await _player.seek(seekTo).timeout(const Duration(seconds: 5));
+      await _player.setSpeed(speed);
+      await _player.play();
+      return await _waitForPositionBeyond(seekTo);
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Loads [url], seeks when [seekTo] is given, plays, and waits

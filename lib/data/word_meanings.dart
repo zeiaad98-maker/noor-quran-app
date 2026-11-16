@@ -70,7 +70,16 @@ class QuranWordData {
   /// Spaces are removed so multi-word phrases match single tapped words.
   static String normalizeArabic(String input) {
     var s = input;
-    s = s.replaceAll(RegExp(r'[\u064B-\u0655\u0670\u0640\u06D6-\u06ED]'), '');
+    // Dagger alef ٰ is usually a REAL alef (e.g. مُّحۡكَمَٰتٌ =
+    // مُّحْكَمَاتٌ, ٱلصَّلَوٰةَ = ٱلصَّلَاةَ): convert it to a plain
+    // ا, do NOT strip it — stripping loses the letter and breaks
+    // matching against the morphology / غريب القرآن entries (v12
+    // fix). EXCEPT on an alef maqsura (مُوسَىٰ): there the ى already
+    // carries the long-a and the dagger alef is only a pronunciation
+    // mark — drop it, or مُوسَىٰ would no longer match مُوسَى.
+    s = s.replaceAll('\u0649\u0670', '\u0649'); // ىٰ -> ى
+    s = s.replaceAll('\u0670', '\u0627'); // ٰ -> ا
+    s = s.replaceAll(RegExp(r'[\u064B-\u0655\u0640\u06D6-\u06ED]'), '');
     s = s.replaceAll('\u0622', '\u0627'); // آ -> ا
     s = s.replaceAll('\u0623', '\u0627'); // أ -> ا
     s = s.replaceAll('\u0625', '\u0627'); // إ -> ا

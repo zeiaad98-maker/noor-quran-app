@@ -6,19 +6,27 @@ import 'package:flutter/services.dart';
 /// ALL mosques of Syria, bundled offline — so the user sees the nearest
 /// mosque anywhere in Syria even with no internet.
 ///
-/// Source: OpenStreetMap Syria extract (Geofabrik syria-261115.osm.pbf,
-/// 2026-11-15), filtered locally for amenity=place_of_worship +
-/// religion=muslim, plus building=mosque and name-based catches
-/// (جامع/مسجد) where the religion tag is missing. Deduped within 50 m
-/// (same place mapped as a node AND a way — the named one is kept).
-/// Clearly-not-mosques excluded: 1 mis-tagged church ('كنيسة (مغلقة)')
-/// and 25 مقامات (shrines). 13 place_of_worship relations were not
-/// extracted (their buildings are normally mapped as ways too).
+/// Source: OpenStreetMap Syria extract (Geofabrik syria-latest.osm.pbf,
+/// 2026-11-16), maximal extraction (amenity=place_of_worship +
+/// religion=muslim, building=mosque, religion=muslim + building/name,
+/// name-based catches جامع/مسجد/مصلى where tags are missing, and
+/// place_of_worship relations), PLUS GeoNames Syria dump (S.MSQE,
+/// CC-BY 4.0 — attribution is shown on the mosques screen) merged at
+/// 250 m. Deduped within 50 m (100 m same-name). Clearly-not-mosques
+/// excluded: 1 mis-tagged church ('كنيسة (مغلقة)') and 25 مقامات
+/// (shrines). 11 of the 13 place_of_worship relations had no member
+/// way candidate and were centroided from the OSM API instead (the
+/// 12th was covered by a member way, the 13th from node members).
 ///
-/// Asset: `assets/quran_data/syria_mosques.json` — 2,919 mosques
-/// (1,837 named, 1,082 unnamed), compact triples [name, lat, lon]
+/// Asset: `assets/quran_data/syria_mosques.json` — 3,057 mosques
+/// (1,976 named, 1,081 unnamed), compact triples [name, lat, lon]
 /// with 5-decimal coordinates. Unnamed entries ship with an empty
 /// name and display as 'مسجد'.
+///
+/// Honest limit: the Awqaf ministry counts 13,759–18,000+ mosques in
+/// Syria, so OSM + GeoNames still cover only ~17–22% of the real
+/// ones — small neighbourhood and rural mosques no map has recorded.
+/// Nothing here is invented: every entry traces to OSM or GeoNames.
 ///
 /// NOTE: the user's local "جامع عثمان" in Muadamiyah is NOT in
 /// OpenStreetMap (only جامع عثمان بن عفان in القدم/داريا, ~4.3 km
