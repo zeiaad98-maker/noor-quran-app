@@ -1,7 +1,10 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:quran/quran.dart' as quran;
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// One reciter, with every audio source the player needs.
 ///
@@ -232,6 +235,111 @@ Future<List<WordSegment>?> fetchWordSegments(
             as Map<String, dynamic>?;
     if (verse == null) return null;
     return parseWordSegments(verse);
+  } catch (_) {
+    return null;
+  }
+}
+
+// -- Word-segment resolution (word audio, no per-tap API wait) --------
+//
+// Root cause of the v9 word-audio failure on a weak connection: every
+// word tap first waited on api.quran.com (Cloudflare — the only
+// non-BunnyCDN host in the audio path, 15 s timeout, no cache, no
+// timeout on the setUrl that follows), then streamed the whole
+// 408 KB ayah file before a late word could sound. Resolution order
+// below makes the common path (Husary, recitation 6) fully offline:
+//   1. bundled asset for Husary — never touches the network;
+//   2. SharedPreferences cache for the other segment reciters
+//      (one API call per ayah, ever);
+//   3. the API, cached on success.
+// Anything without segments falls back to the wbw recording.
+
+/// Bundled Husary (recitation 6) segments for the whole Mushaf:
+/// `assets/quran_data/word_segments_husary.json`, generated from the
+/// live API by `tool/fetch_husary_word_segments.py`
+/// (`{"2:33": [[850, 1760], ...], ...}`, 6218 ayahs / 77,098 words).
+/// 18 ayahs are absent: the API skips a word index there (e.g. 2:125
+/// jumps from index 16 to 18), so no contiguous segment list exists —
+/// those ayahs fall back to wbw, exactly as a failed API call would.
+Map<String, dynamic>? _bundledHusary;
+Future<void>? _bundledHusaryFuture;
+
+Future<void> _ensureBundledHusary() async {
+  _bundledHusaryFuture ??= rootBundle
+      .loadString('assets/quran_data/word_segments_husary.json')
+      .then((raw) {
+    _bundledHusary = jsonDecode(raw) as Map<String, dynamic>;
+  });
+  return _bundledHusaryFuture!;
+}
+
+/// Segments of one ayah from the bundled Husary asset, or null when
+/// the ayah is one of the 28 without a contiguous list. Pure parsing
+/// of a decoded pair list, so tests can inject a fake bundle.
+List<WordSegment>? parseStoredSegments(List<dynamic> pairs) {
+  final out = <WordSegment>[];
+  var prevStart = -1;
+  for (final raw in pairs) {
+    final pair = raw as List<dynamic>;
+    if (pair.length < 2) return null;
+    final start = pair[0] as int;
+    final end = pair[1] as int;
+    // Starts must not go backwards. Overlapping spans ARE allowed:
+    // a segment spanning several words is stored once per word it
+    // covers (e.g. 2:125 has [34280, 37290] twice), so start can
+    // equal — but never fall below — the previous start.
+    if (start < 0 || end <= start || start < prevStart) return null;
+    out.add(WordSegment(start, end));
+    prevStart = start;
+  }
+  return out.isEmpty ? null : out;
+}
+
+/// Test seam: replace the bundled Husary map (and reset the loader).
+@visibleForTesting
+void setBundledHusaryForTest(Map<String, dynamic>? bundle) {
+  _bundledHusary = bundle;
+  _bundledHusaryFuture = bundle == null
+      ? null
+      : Future<void>.value();
+}
+
+Future<List<WordSegment>?> bundledWordSegments(
+    int surah, int ayah) async {
+  await _ensureBundledHusary();
+  final raw =
+      _bundledHusary!['$surah:$ayah'] as List<dynamic>?;
+  if (raw == null) return null;
+  return parseStoredSegments(raw);
+}
+
+/// Cheapest-first segment resolution for one ayah (see above).
+/// Never throws: every failure degrades to null (wbw fallback).
+Future<List<WordSegment>?> wordSegmentsFor(
+    Reciter reciter, int surah, int ayah) async {
+  final recitationId = reciter.quranComRecitationId;
+  if (recitationId == null) return null;
+  if (recitationId == 6) return bundledWordSegments(surah, ayah);
+  final key = 'word_segments_${recitationId}_$surah:$ayah';
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final cached = prefs.getString(key);
+    if (cached != null) {
+      final stored = jsonDecode(cached) as List<dynamic>;
+      final segments = parseStoredSegments(stored);
+      if (segments != null) return segments;
+      await prefs.remove(key);
+    }
+    final segments = await fetchWordSegments(reciter, surah, ayah);
+    if (segments != null) {
+      await prefs.setString(
+        key,
+        jsonEncode([
+          for (final s in segments) [s.startMs, s.endMs],
+        ]),
+      );
+    }
+    return segments;
   } catch (_) {
     return null;
   }

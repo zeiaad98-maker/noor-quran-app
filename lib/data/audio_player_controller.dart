@@ -33,6 +33,7 @@ class AudioPlayerController extends ChangeNotifier {
 
   bool isPlaying = false;
   bool isLoading = false;
+  bool isMuted = false;
   bool repeatItem = false;
   bool repeatScope = false;
   /// 0 = endless, otherwise the number of plays.
@@ -53,6 +54,19 @@ class AudioPlayerController extends ChangeNotifier {
 
   /// Fired on a playback error with a retry action for the SnackBar.
   void Function(String message, Future<void> Function() retry)? onError;
+
+  /// Last playback error, shown INSIDE the player sheet (the old
+  /// SnackBar-only error was hidden behind the modal sheet, so a
+  /// failed word tap looked like nothing happening at all).
+  String? lastError;
+
+  /// Retries the item that failed (clears [lastError] first).
+  Future<void> retryLastError() async {
+    if (lastError == null) return;
+    lastError = null;
+    notifyListeners();
+    await _playCurrent();
+  }
 
   int _itemPlays = 0;
   int _scopePlays = 0;
@@ -218,12 +232,26 @@ class AudioPlayerController extends ChangeNotifier {
   }
 
   Future<void> stop() async {
+    // Invalidate any in-flight _playCurrent: without this, a load
+    // that finishes after the user closed the sheet would seek + play
+    // with no UI at all (ghost audio), and its finally{} would clear
+    // the next load's spinner.
+    _playToken++;
     _wordEnd = null;
     await _player.stop();
     if (!_disposed) {
       isPlaying = false;
       notifyListeners();
     }
+  }
+
+  /// Mutes / unmutes the player (the word popup's mute button).
+  /// Just sets the volume to 0 / back to 1 — the playback position
+  /// and state are untouched, so unmuting resumes the sound in place.
+  Future<void> toggleMute() async {
+    isMuted = !isMuted;
+    await _player.setVolume(isMuted ? 0.0 : 1.0);
+    notifyListeners();
   }
 
   // -- internals -------------------------------------------------------
@@ -327,59 +355,142 @@ class AudioPlayerController extends ChangeNotifier {
     if (!isReplay) _itemPlays = 1;
     _wordEnd = null;
     _wordEndHandled = false;
+    lastError = null;
     isLoading = true;
     notifyListeners();
 
-    String url;
-    Duration? seekTo;
     try {
       if (scope == PlayerScope.word) {
-        final word = wordIndex ?? 1;
-        final qcUrl = quranComAyahUrl(reciter, ayah.$1, ayah.$2);
-        if (qcUrl != null) {
-          wordSegments ??=
-              await fetchWordSegments(reciter, ayah.$1, ayah.$2);
-          final segments = wordSegments;
-          if (segments != null && word - 1 < segments.length) {
-            wordCount = segments.length;
-            url = qcUrl;
-            final seg = segments[word - 1];
-            seekTo = Duration(milliseconds: seg.startMs);
-            _wordEnd = Duration(milliseconds: seg.endMs);
-            wordUsesWbw = false;
-          } else {
-            url = wbwWordUrl(ayah.$1, ayah.$2, word);
-            wordUsesWbw = true;
-          }
-        } else {
-          url = wbwWordUrl(ayah.$1, ayah.$2, word);
-          wordUsesWbw = true;
-        }
+        await _playWordCurrent(token, ayah);
       } else {
-        url = everyayahUrl(reciter, ayah.$1, ayah.$2);
+        final url = everyayahUrl(reciter, ayah.$1, ayah.$2);
+        if (token != _playToken || _disposed) return;
+        await _player.stop();
+        await _player.setLoopMode(LoopMode.off);
+        // Bounded: the old bare setUrl could hang forever on a
+        // stalled connection, leaving the spinner up with no sound
+        // and no error.
+        await _player
+            .setUrl(url)
+            .timeout(const Duration(seconds: 20));
+        if (token != _playToken || _disposed) return;
+        await _player.setSpeed(speed);
+        await _player.play();
       }
-      if (token != _playToken || _disposed) return;
-      await _player.stop();
-      await _player.setLoopMode(LoopMode.off);
-      await _player.setUrl(url);
-      if (token != _playToken || _disposed) return;
-      if (seekTo != null) await _player.seek(seekTo);
-      await _player.setSpeed(speed);
-      await _player.play();
+    } on TimeoutException {
+      _reportError(_playCurrent);
     } on PlayerException {
       _reportError(_playCurrent);
     } catch (_) {
       _reportError(_playCurrent);
     } finally {
-      if (!_disposed) {
+      // A stale token's finally must not clear the newer load's
+      // spinner (the old code did, so the spinner vanished while
+      // the new word was still loading).
+      if (!_disposed && token == _playToken) {
         isLoading = false;
         notifyListeners();
       }
     }
   }
 
+  /// Word scope: segments come from the bundle / cache / API
+  /// (wordSegmentsFor — no per-tap API wait for Husary), then the
+  /// word is played from the reciter's own ayah recording. Every
+  /// step is time-boxed, and a stalled ayah file falls back to the
+  /// small wbw word file (43–102 KB, no seek, starts at 0) instead
+  /// of spinning forever: on a 20 KB/s connection the full 408 KB
+  /// ayah file needs ~18 s before a late word can sound, while the
+  /// wbw file needs ~1–4 s.
+  Future<void> _playWordCurrent(int token, (int, int) ayah) async {
+    final word = wordIndex ?? 1;
+    final qcUrl = quranComAyahUrl(reciter, ayah.$1, ayah.$2);
+    if (qcUrl != null) {
+      wordSegments ??=
+          await wordSegmentsFor(reciter, ayah.$1, ayah.$2);
+      final segments = wordSegments;
+      if (segments != null && word - 1 < segments.length) {
+        wordCount = segments.length;
+        final seg = segments[word - 1];
+        final seekTo = Duration(milliseconds: seg.startMs);
+        _wordEnd = Duration(milliseconds: seg.endMs);
+        wordUsesWbw = false;
+        if (token != _playToken || _disposed) return;
+        await _player.stop();
+        await _player.setLoopMode(LoopMode.off);
+        if (await _loadAndPlay(qcUrl, seekTo)) return;
+        // Ayah file stalled: fall through to the wbw file below.
+        // The seek/end state belongs to the ayah file — reset it so
+        // the position listener cannot cut the wbw file short.
+        _wordEnd = null;
+        _wordEndHandled = false;
+      }
+    }
+    // No segments (reciter without them, one of the 18 bundle gaps,
+    // or API + cache both failed) or the ayah file stalled: the
+    // small wbw word recording.
+    wordUsesWbw = true;
+    if (token != _playToken || _disposed) return;
+    await _player.stop();
+    await _player.setLoopMode(LoopMode.off);
+    final ok = await _loadAndPlay(
+      wbwWordUrl(ayah.$1, ayah.$2, word),
+      Duration.zero,
+    );
+    if (!ok) _reportError(_playCurrent);
+  }
+
+  /// Loads [url], seeks when [seekTo] is given, plays, and waits
+  /// until the position actually moves past the seek point — a
+  /// stalled buffer leaves the position frozen, which is exactly
+  /// the "spinner forever, no sound" failure. Returns false on any
+  /// timeout or error instead of throwing; the caller decides the
+  /// fallback. The token is checked by the caller.
+  Future<bool> _loadAndPlay(String url, Duration seekTo) async {
+    try {
+      await _player.setUrl(url).timeout(const Duration(seconds: 10));
+      await _player.seek(seekTo).timeout(const Duration(seconds: 5));
+      await _player.setSpeed(speed);
+      await _player.play();
+      return await _waitForPositionBeyond(seekTo);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// True once the player position has moved past [target] (+100 ms
+  /// of slack), or the item already finished (a very short word can
+  /// complete before the first position event arrives — it did play).
+  /// False after 6 s with no movement (buffering stall). The timer
+  /// lives inside, so timing out cannot leak the subscription.
+  Future<bool> _waitForPositionBeyond(Duration target) async {
+    final beyond = target + const Duration(milliseconds: 100);
+    if (_player.position > beyond ||
+        _player.processingState == ProcessingState.completed) {
+      return true;
+    }
+    final completer = Completer<bool>();
+    void done(bool value) {
+      if (!completer.isCompleted) completer.complete(value);
+    }
+
+    late final StreamSubscription<Duration> sub;
+    sub = _player.positionStream.listen((position) {
+      if (position > beyond) done(true);
+    });
+    final timer = Timer(const Duration(seconds: 6), () => done(false));
+    try {
+      return await completer.future;
+    } finally {
+      timer.cancel();
+      await sub.cancel();
+    }
+  }
+
   void _reportError(Future<void> Function() retry) {
     isPlaying = false;
+    lastError =
+        'تعذّر تشغيل الصوت — تحقق من الاتصال بالإنترنت وحاول مجدداً';
     notifyListeners();
     onError?.call(
       'الصوت يحتاج إنترنت قوي — تحقق من الاتصال وحاول مجدداً',
