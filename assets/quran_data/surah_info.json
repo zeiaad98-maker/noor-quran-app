@@ -1,0 +1,1150 @@
+{
+ "meta": {
+  "source_dalail": "Dalail get_surah_info (جدول quran_surahs), 114 surahs, complete",
+  "source_crosscheck": "quran.com API v4 https://api.quran.com/api/v4/chapters (curl 2026-11-16, HTTP 200, 114 chapters)",
+  "verification": "revelation_place + revelation_order + verses_count + pages compared for all 114 surahs: 0 mismatches",
+  "fields_note": "ayah_count and page_start/page_end agree with quran.com too; the app already has ayah counts from its quran package — this file is the verified نزول السورة source of truth"
+ },
+ "surahs": [
+  {
+   "surah": 1,
+   "name_ar": "الفاتحة",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 7,
+   "revelation_order": 5,
+   "page_start": 1,
+   "page_end": 1
+  },
+  {
+   "surah": 2,
+   "name_ar": "البقرة",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 286,
+   "revelation_order": 87,
+   "page_start": 2,
+   "page_end": 49
+  },
+  {
+   "surah": 3,
+   "name_ar": "آل عمران",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 200,
+   "revelation_order": 89,
+   "page_start": 50,
+   "page_end": 76
+  },
+  {
+   "surah": 4,
+   "name_ar": "النساء",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 176,
+   "revelation_order": 92,
+   "page_start": 77,
+   "page_end": 106
+  },
+  {
+   "surah": 5,
+   "name_ar": "المائدة",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 120,
+   "revelation_order": 112,
+   "page_start": 106,
+   "page_end": 127
+  },
+  {
+   "surah": 6,
+   "name_ar": "الأنعام",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 165,
+   "revelation_order": 55,
+   "page_start": 128,
+   "page_end": 150
+  },
+  {
+   "surah": 7,
+   "name_ar": "الأعراف",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 206,
+   "revelation_order": 39,
+   "page_start": 151,
+   "page_end": 176
+  },
+  {
+   "surah": 8,
+   "name_ar": "الأنفال",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 75,
+   "revelation_order": 88,
+   "page_start": 177,
+   "page_end": 186
+  },
+  {
+   "surah": 9,
+   "name_ar": "التوبة",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 129,
+   "revelation_order": 113,
+   "page_start": 187,
+   "page_end": 207
+  },
+  {
+   "surah": 10,
+   "name_ar": "يونس",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 109,
+   "revelation_order": 51,
+   "page_start": 208,
+   "page_end": 221
+  },
+  {
+   "surah": 11,
+   "name_ar": "هود",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 123,
+   "revelation_order": 52,
+   "page_start": 221,
+   "page_end": 235
+  },
+  {
+   "surah": 12,
+   "name_ar": "يوسف",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 111,
+   "revelation_order": 53,
+   "page_start": 235,
+   "page_end": 248
+  },
+  {
+   "surah": 13,
+   "name_ar": "الرعد",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 43,
+   "revelation_order": 96,
+   "page_start": 249,
+   "page_end": 255
+  },
+  {
+   "surah": 14,
+   "name_ar": "ابراهيم",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 52,
+   "revelation_order": 72,
+   "page_start": 255,
+   "page_end": 261
+  },
+  {
+   "surah": 15,
+   "name_ar": "الحجر",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 99,
+   "revelation_order": 54,
+   "page_start": 262,
+   "page_end": 267
+  },
+  {
+   "surah": 16,
+   "name_ar": "النحل",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 128,
+   "revelation_order": 70,
+   "page_start": 267,
+   "page_end": 281
+  },
+  {
+   "surah": 17,
+   "name_ar": "الإسراء",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 111,
+   "revelation_order": 50,
+   "page_start": 282,
+   "page_end": 293
+  },
+  {
+   "surah": 18,
+   "name_ar": "الكهف",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 110,
+   "revelation_order": 69,
+   "page_start": 293,
+   "page_end": 304
+  },
+  {
+   "surah": 19,
+   "name_ar": "مريم",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 98,
+   "revelation_order": 44,
+   "page_start": 305,
+   "page_end": 312
+  },
+  {
+   "surah": 20,
+   "name_ar": "طه",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 135,
+   "revelation_order": 45,
+   "page_start": 312,
+   "page_end": 321
+  },
+  {
+   "surah": 21,
+   "name_ar": "الأنبياء",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 112,
+   "revelation_order": 73,
+   "page_start": 322,
+   "page_end": 331
+  },
+  {
+   "surah": 22,
+   "name_ar": "الحج",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 78,
+   "revelation_order": 103,
+   "page_start": 332,
+   "page_end": 341
+  },
+  {
+   "surah": 23,
+   "name_ar": "المؤمنون",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 118,
+   "revelation_order": 74,
+   "page_start": 342,
+   "page_end": 349
+  },
+  {
+   "surah": 24,
+   "name_ar": "النور",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 64,
+   "revelation_order": 102,
+   "page_start": 350,
+   "page_end": 359
+  },
+  {
+   "surah": 25,
+   "name_ar": "الفرقان",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 77,
+   "revelation_order": 42,
+   "page_start": 359,
+   "page_end": 366
+  },
+  {
+   "surah": 26,
+   "name_ar": "الشعراء",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 227,
+   "revelation_order": 47,
+   "page_start": 367,
+   "page_end": 376
+  },
+  {
+   "surah": 27,
+   "name_ar": "النمل",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 93,
+   "revelation_order": 48,
+   "page_start": 377,
+   "page_end": 385
+  },
+  {
+   "surah": 28,
+   "name_ar": "القصص",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 88,
+   "revelation_order": 49,
+   "page_start": 385,
+   "page_end": 396
+  },
+  {
+   "surah": 29,
+   "name_ar": "العنكبوت",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 69,
+   "revelation_order": 85,
+   "page_start": 396,
+   "page_end": 404
+  },
+  {
+   "surah": 30,
+   "name_ar": "الروم",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 60,
+   "revelation_order": 84,
+   "page_start": 404,
+   "page_end": 410
+  },
+  {
+   "surah": 31,
+   "name_ar": "لقمان",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 34,
+   "revelation_order": 57,
+   "page_start": 411,
+   "page_end": 414
+  },
+  {
+   "surah": 32,
+   "name_ar": "السجدة",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 30,
+   "revelation_order": 75,
+   "page_start": 415,
+   "page_end": 417
+  },
+  {
+   "surah": 33,
+   "name_ar": "الأحزاب",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 73,
+   "revelation_order": 90,
+   "page_start": 418,
+   "page_end": 427
+  },
+  {
+   "surah": 34,
+   "name_ar": "سبإ",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 54,
+   "revelation_order": 58,
+   "page_start": 428,
+   "page_end": 434
+  },
+  {
+   "surah": 35,
+   "name_ar": "فاطر",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 45,
+   "revelation_order": 43,
+   "page_start": 434,
+   "page_end": 440
+  },
+  {
+   "surah": 36,
+   "name_ar": "يس",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 83,
+   "revelation_order": 41,
+   "page_start": 440,
+   "page_end": 445
+  },
+  {
+   "surah": 37,
+   "name_ar": "الصافات",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 182,
+   "revelation_order": 56,
+   "page_start": 446,
+   "page_end": 452
+  },
+  {
+   "surah": 38,
+   "name_ar": "ص",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 88,
+   "revelation_order": 38,
+   "page_start": 453,
+   "page_end": 458
+  },
+  {
+   "surah": 39,
+   "name_ar": "الزمر",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 75,
+   "revelation_order": 59,
+   "page_start": 458,
+   "page_end": 467
+  },
+  {
+   "surah": 40,
+   "name_ar": "غافر",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 85,
+   "revelation_order": 60,
+   "page_start": 467,
+   "page_end": 476
+  },
+  {
+   "surah": 41,
+   "name_ar": "فصلت",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 54,
+   "revelation_order": 61,
+   "page_start": 477,
+   "page_end": 482
+  },
+  {
+   "surah": 42,
+   "name_ar": "الشورى",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 53,
+   "revelation_order": 62,
+   "page_start": 483,
+   "page_end": 489
+  },
+  {
+   "surah": 43,
+   "name_ar": "الزخرف",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 89,
+   "revelation_order": 63,
+   "page_start": 489,
+   "page_end": 495
+  },
+  {
+   "surah": 44,
+   "name_ar": "الدخان",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 59,
+   "revelation_order": 64,
+   "page_start": 496,
+   "page_end": 498
+  },
+  {
+   "surah": 45,
+   "name_ar": "الجاثية",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 37,
+   "revelation_order": 65,
+   "page_start": 499,
+   "page_end": 502
+  },
+  {
+   "surah": 46,
+   "name_ar": "الأحقاف",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 35,
+   "revelation_order": 66,
+   "page_start": 502,
+   "page_end": 506
+  },
+  {
+   "surah": 47,
+   "name_ar": "محمد",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 38,
+   "revelation_order": 95,
+   "page_start": 507,
+   "page_end": 510
+  },
+  {
+   "surah": 48,
+   "name_ar": "الفتح",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 29,
+   "revelation_order": 111,
+   "page_start": 511,
+   "page_end": 515
+  },
+  {
+   "surah": 49,
+   "name_ar": "الحجرات",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 18,
+   "revelation_order": 106,
+   "page_start": 515,
+   "page_end": 517
+  },
+  {
+   "surah": 50,
+   "name_ar": "ق",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 45,
+   "revelation_order": 34,
+   "page_start": 518,
+   "page_end": 520
+  },
+  {
+   "surah": 51,
+   "name_ar": "الذاريات",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 60,
+   "revelation_order": 67,
+   "page_start": 520,
+   "page_end": 523
+  },
+  {
+   "surah": 52,
+   "name_ar": "الطور",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 49,
+   "revelation_order": 76,
+   "page_start": 523,
+   "page_end": 525
+  },
+  {
+   "surah": 53,
+   "name_ar": "النجم",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 62,
+   "revelation_order": 23,
+   "page_start": 526,
+   "page_end": 528
+  },
+  {
+   "surah": 54,
+   "name_ar": "القمر",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 55,
+   "revelation_order": 37,
+   "page_start": 528,
+   "page_end": 531
+  },
+  {
+   "surah": 55,
+   "name_ar": "الرحمن",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 78,
+   "revelation_order": 97,
+   "page_start": 531,
+   "page_end": 534
+  },
+  {
+   "surah": 56,
+   "name_ar": "الواقعة",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 96,
+   "revelation_order": 46,
+   "page_start": 534,
+   "page_end": 537
+  },
+  {
+   "surah": 57,
+   "name_ar": "الحديد",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 29,
+   "revelation_order": 94,
+   "page_start": 537,
+   "page_end": 541
+  },
+  {
+   "surah": 58,
+   "name_ar": "المجادلة",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 22,
+   "revelation_order": 105,
+   "page_start": 542,
+   "page_end": 545
+  },
+  {
+   "surah": 59,
+   "name_ar": "الحشر",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 24,
+   "revelation_order": 101,
+   "page_start": 545,
+   "page_end": 548
+  },
+  {
+   "surah": 60,
+   "name_ar": "الممتحنة",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 13,
+   "revelation_order": 91,
+   "page_start": 549,
+   "page_end": 551
+  },
+  {
+   "surah": 61,
+   "name_ar": "الصف",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 14,
+   "revelation_order": 109,
+   "page_start": 551,
+   "page_end": 552
+  },
+  {
+   "surah": 62,
+   "name_ar": "الجمعة",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 11,
+   "revelation_order": 110,
+   "page_start": 553,
+   "page_end": 554
+  },
+  {
+   "surah": 63,
+   "name_ar": "المنافقون",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 11,
+   "revelation_order": 104,
+   "page_start": 554,
+   "page_end": 555
+  },
+  {
+   "surah": 64,
+   "name_ar": "التغابن",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 18,
+   "revelation_order": 108,
+   "page_start": 556,
+   "page_end": 557
+  },
+  {
+   "surah": 65,
+   "name_ar": "الطلاق",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 12,
+   "revelation_order": 99,
+   "page_start": 558,
+   "page_end": 559
+  },
+  {
+   "surah": 66,
+   "name_ar": "التحريم",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 12,
+   "revelation_order": 107,
+   "page_start": 560,
+   "page_end": 561
+  },
+  {
+   "surah": 67,
+   "name_ar": "الملك",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 30,
+   "revelation_order": 77,
+   "page_start": 562,
+   "page_end": 564
+  },
+  {
+   "surah": 68,
+   "name_ar": "القلم",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 52,
+   "revelation_order": 2,
+   "page_start": 564,
+   "page_end": 566
+  },
+  {
+   "surah": 69,
+   "name_ar": "الحاقة",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 52,
+   "revelation_order": 78,
+   "page_start": 566,
+   "page_end": 568
+  },
+  {
+   "surah": 70,
+   "name_ar": "المعارج",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 44,
+   "revelation_order": 79,
+   "page_start": 568,
+   "page_end": 570
+  },
+  {
+   "surah": 71,
+   "name_ar": "نوح",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 28,
+   "revelation_order": 71,
+   "page_start": 570,
+   "page_end": 571
+  },
+  {
+   "surah": 72,
+   "name_ar": "الجن",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 28,
+   "revelation_order": 40,
+   "page_start": 572,
+   "page_end": 573
+  },
+  {
+   "surah": 73,
+   "name_ar": "المزمل",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 20,
+   "revelation_order": 3,
+   "page_start": 574,
+   "page_end": 575
+  },
+  {
+   "surah": 74,
+   "name_ar": "المدثر",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 56,
+   "revelation_order": 4,
+   "page_start": 575,
+   "page_end": 577
+  },
+  {
+   "surah": 75,
+   "name_ar": "القيامة",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 40,
+   "revelation_order": 31,
+   "page_start": 577,
+   "page_end": 578
+  },
+  {
+   "surah": 76,
+   "name_ar": "الانسان",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 31,
+   "revelation_order": 98,
+   "page_start": 578,
+   "page_end": 580
+  },
+  {
+   "surah": 77,
+   "name_ar": "المرسلات",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 50,
+   "revelation_order": 33,
+   "page_start": 580,
+   "page_end": 581
+  },
+  {
+   "surah": 78,
+   "name_ar": "النبإ",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 40,
+   "revelation_order": 80,
+   "page_start": 582,
+   "page_end": 583
+  },
+  {
+   "surah": 79,
+   "name_ar": "النازعات",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 46,
+   "revelation_order": 81,
+   "page_start": 583,
+   "page_end": 584
+  },
+  {
+   "surah": 80,
+   "name_ar": "عبس",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 42,
+   "revelation_order": 24,
+   "page_start": 585,
+   "page_end": 585
+  },
+  {
+   "surah": 81,
+   "name_ar": "التكوير",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 29,
+   "revelation_order": 7,
+   "page_start": 586,
+   "page_end": 586
+  },
+  {
+   "surah": 82,
+   "name_ar": "الإنفطار",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 19,
+   "revelation_order": 82,
+   "page_start": 587,
+   "page_end": 587
+  },
+  {
+   "surah": 83,
+   "name_ar": "المطففين",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 36,
+   "revelation_order": 86,
+   "page_start": 587,
+   "page_end": 589
+  },
+  {
+   "surah": 84,
+   "name_ar": "الإنشقاق",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 25,
+   "revelation_order": 83,
+   "page_start": 589,
+   "page_end": 589
+  },
+  {
+   "surah": 85,
+   "name_ar": "البروج",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 22,
+   "revelation_order": 27,
+   "page_start": 590,
+   "page_end": 590
+  },
+  {
+   "surah": 86,
+   "name_ar": "الطارق",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 17,
+   "revelation_order": 36,
+   "page_start": 591,
+   "page_end": 591
+  },
+  {
+   "surah": 87,
+   "name_ar": "الأعلى",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 19,
+   "revelation_order": 8,
+   "page_start": 591,
+   "page_end": 592
+  },
+  {
+   "surah": 88,
+   "name_ar": "الغاشية",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 26,
+   "revelation_order": 68,
+   "page_start": 592,
+   "page_end": 592
+  },
+  {
+   "surah": 89,
+   "name_ar": "الفجر",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 30,
+   "revelation_order": 10,
+   "page_start": 593,
+   "page_end": 594
+  },
+  {
+   "surah": 90,
+   "name_ar": "البلد",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 20,
+   "revelation_order": 35,
+   "page_start": 594,
+   "page_end": 594
+  },
+  {
+   "surah": 91,
+   "name_ar": "الشمس",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 15,
+   "revelation_order": 26,
+   "page_start": 595,
+   "page_end": 595
+  },
+  {
+   "surah": 92,
+   "name_ar": "الليل",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 21,
+   "revelation_order": 9,
+   "page_start": 595,
+   "page_end": 596
+  },
+  {
+   "surah": 93,
+   "name_ar": "الضحى",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 11,
+   "revelation_order": 11,
+   "page_start": 596,
+   "page_end": 596
+  },
+  {
+   "surah": 94,
+   "name_ar": "الشرح",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 8,
+   "revelation_order": 12,
+   "page_start": 596,
+   "page_end": 596
+  },
+  {
+   "surah": 95,
+   "name_ar": "التين",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 8,
+   "revelation_order": 28,
+   "page_start": 597,
+   "page_end": 597
+  },
+  {
+   "surah": 96,
+   "name_ar": "العلق",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 19,
+   "revelation_order": 1,
+   "page_start": 597,
+   "page_end": 597
+  },
+  {
+   "surah": 97,
+   "name_ar": "القدر",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 5,
+   "revelation_order": 25,
+   "page_start": 598,
+   "page_end": 598
+  },
+  {
+   "surah": 98,
+   "name_ar": "البينة",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 8,
+   "revelation_order": 100,
+   "page_start": 598,
+   "page_end": 599
+  },
+  {
+   "surah": 99,
+   "name_ar": "الزلزلة",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 8,
+   "revelation_order": 93,
+   "page_start": 599,
+   "page_end": 599
+  },
+  {
+   "surah": 100,
+   "name_ar": "العاديات",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 11,
+   "revelation_order": 14,
+   "page_start": 599,
+   "page_end": 600
+  },
+  {
+   "surah": 101,
+   "name_ar": "القارعة",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 11,
+   "revelation_order": 30,
+   "page_start": 600,
+   "page_end": 600
+  },
+  {
+   "surah": 102,
+   "name_ar": "التكاثر",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 8,
+   "revelation_order": 16,
+   "page_start": 600,
+   "page_end": 600
+  },
+  {
+   "surah": 103,
+   "name_ar": "العصر",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 3,
+   "revelation_order": 13,
+   "page_start": 601,
+   "page_end": 601
+  },
+  {
+   "surah": 104,
+   "name_ar": "الهمزة",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 9,
+   "revelation_order": 32,
+   "page_start": 601,
+   "page_end": 601
+  },
+  {
+   "surah": 105,
+   "name_ar": "الفيل",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 5,
+   "revelation_order": 19,
+   "page_start": 601,
+   "page_end": 601
+  },
+  {
+   "surah": 106,
+   "name_ar": "قريش",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 4,
+   "revelation_order": 29,
+   "page_start": 602,
+   "page_end": 602
+  },
+  {
+   "surah": 107,
+   "name_ar": "الماعون",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 7,
+   "revelation_order": 17,
+   "page_start": 602,
+   "page_end": 602
+  },
+  {
+   "surah": 108,
+   "name_ar": "الكوثر",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 3,
+   "revelation_order": 15,
+   "page_start": 602,
+   "page_end": 602
+  },
+  {
+   "surah": 109,
+   "name_ar": "الكافرون",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 6,
+   "revelation_order": 18,
+   "page_start": 603,
+   "page_end": 603
+  },
+  {
+   "surah": 110,
+   "name_ar": "النصر",
+   "revelation_place": "madinah",
+   "revelation_place_ar": "مدنية",
+   "ayah_count": 3,
+   "revelation_order": 114,
+   "page_start": 603,
+   "page_end": 603
+  },
+  {
+   "surah": 111,
+   "name_ar": "المسد",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 5,
+   "revelation_order": 6,
+   "page_start": 603,
+   "page_end": 603
+  },
+  {
+   "surah": 112,
+   "name_ar": "الإخلاص",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 4,
+   "revelation_order": 22,
+   "page_start": 604,
+   "page_end": 604
+  },
+  {
+   "surah": 113,
+   "name_ar": "الفلق",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 5,
+   "revelation_order": 20,
+   "page_start": 604,
+   "page_end": 604
+  },
+  {
+   "surah": 114,
+   "name_ar": "الناس",
+   "revelation_place": "makkah",
+   "revelation_place_ar": "مكية",
+   "ayah_count": 6,
+   "revelation_order": 21,
+   "page_start": 604,
+   "page_end": 604
+  }
+ ]
+}
