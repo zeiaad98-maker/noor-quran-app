@@ -1,5 +1,4 @@
 import 'package:material_ui/material_ui.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:quran/quran.dart' as quran;
 import '../screens/surah_reader_screen.dart';
 
@@ -211,9 +210,10 @@ class _QuranSearchViewState extends State<QuranSearchView> {
                             Text(
                               text,
                               textDirection: TextDirection.rtl,
-                              style: GoogleFonts.amiriQuran(
-                                fontSize: 19,
-                                height: 1.8,
+                              style: const TextStyle(
+                                fontFamily: 'Hafs',
+                                fontSize: 20,
+                                height: 1.9,
                               ),
                             ),
                           ],
