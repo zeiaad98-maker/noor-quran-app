@@ -17,6 +17,7 @@ import '../widgets/ayah_action_sheet.dart';
 import '../widgets/noor_qcf_page.dart';
 import '../widgets/quran_search_sheet.dart';
 import '../widgets/surah_name_image.dart';
+import '../widgets/word_popup.dart';
 import 'notes_screen.dart';
 
 /// Full-screen Mushaf reader — QCF text rendering (Madina Mushaf font),
@@ -416,6 +417,32 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
     ).then((_) => _loadNotedAyahs());
   }
 
+  /// Word popup (v10): opened by tapping a single word on the page.
+  /// [wordIndex] is the TRUE 0-based Uthmani word index from the QCF
+  /// word map; the audio controller takes a 1-based word position
+  /// (the ayah sheet passes i + 1), so the play callback adds 1.
+  /// Tapping the verse-end number glyph still opens the ayah sheet
+  /// ([_openAyahSheet]) — that is the way to notes / ayah audio.
+  void _openWordPopup(int surah, int verse, int wordIndex) {
+    showWordPopup(
+      context: context,
+      surah: surah,
+      verse: verse,
+      wordIndex: wordIndex,
+      audioController: _audioController,
+      isBookmarked: _isBookmarked,
+      onToggleBookmark: _toggleBookmark,
+      onOpenSettings: _showMushafSettingsSheet,
+      onPlayWord: (word) => _openPlayerSheet(
+        scope: PlayerScope.word,
+        surah: surah,
+        verse: verse,
+        wordIndex: word + 1,
+      ),
+      onOpenNotes: () => _openAyahSheet(surah, verse),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = NoorQuranApp.of(context)!.isDarkMode;
@@ -571,6 +598,8 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                                   onPageChanged: _onPageChanged,
                                   onTap: (surah, verse) =>
                                       _openAyahSheet(surah, verse),
+                                  onWordTap: (surah, verse, wordIndex) =>
+                                      _openWordPopup(surah, verse, wordIndex),
                                 ),
                               );
                             },

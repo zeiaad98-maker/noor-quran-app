@@ -22,6 +22,47 @@ class NearbyMosquesScreen extends StatefulWidget {
   State<NearbyMosquesScreen> createState() => _NearbyMosquesScreenState();
 }
 
+/// First segment of a Nominatim display_name ("جامع العمري, ...").
+/// Falls back to 'مسجد' when empty.
+String mosqueNameFromDisplayName(String? displayName) {
+  final name = (displayName ?? 'مسجد').split(',').first.trim();
+  return name.isEmpty ? 'مسجد' : name;
+}
+
+/// True when the name actually names a mosque (contains جامع or مسجد).
+/// Nominatim free-text search matches the query word anywhere in the
+/// address, so a `q=مسجد` search also returns streets, church names
+/// and entrances ("شارع البلدية", "الكنيسة الإنجيلية", ...) — those
+/// must be dropped, not shown as mosques.
+bool isMosqueName(String name) =>
+    name.contains('جامع') || name.contains('مسجد');
+
+/// Parses one Nominatim search response into mosque entries
+/// ({name, lat, lng, distance} in metres from [userLat]/[userLng]).
+/// Drops entries without coordinates and entries farther than 8 km.
+/// When [requireMosqueWord] is true (the `q=مسجد` query), entries
+/// whose name does not name a mosque are dropped too.
+List<Map<String, dynamic>> parseNominatimMosques(
+  List<dynamic> items,
+  double userLat,
+  double userLng, {
+  bool requireMosqueWord = false,
+}) {
+  final out = <Map<String, dynamic>>[];
+  for (final item in items) {
+    final mLat = double.tryParse(item['lat']?.toString() ?? '');
+    final mLng = double.tryParse(item['lon']?.toString() ?? '');
+    if (mLat == null || mLng == null) continue;
+    final name = mosqueNameFromDisplayName(item['display_name']?.toString());
+    if (requireMosqueWord && !isMosqueName(name)) continue;
+    final dist = Geolocator.distanceBetween(userLat, userLng, mLat, mLng);
+    if (dist <= 8000) {
+      out.add({'name': name, 'lat': mLat, 'lng': mLng, 'distance': dist});
+    }
+  }
+  return out;
+}
+
 class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
   final MapController _mapController = MapController();
   bool _isLoading = true;
@@ -48,44 +89,46 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
       }
     }
 
-    // المحرك الأول: Nominatim OpenStreetMap (سريع وموثوق جداً عبر GET)
-    try {
-      final delta = 0.04; // نطاق ~4.5 كم حول المستخدم
-      final viewbox = '${widget.lng - delta},${widget.lat + delta},${widget.lng + delta},${widget.lat - delta}';
-      final url = Uri.parse(
-        'https://nominatim.openstreetmap.org/search?q=mosque&format=json&bounded=1&viewbox=$viewbox&limit=50&accept-language=ar',
-      );
-      final res = await http.get(url, headers: {'User-Agent': 'NoorQuranApp/1.0 (syria.noor.quran)'}).timeout(const Duration(seconds: 10));
-      if (res.statusCode == 200) {
-        final list = json.decode(utf8.decode(res.bodyBytes)) as List;
-        for (final item in list) {
-          final mLat = double.tryParse(item['lat']?.toString() ?? '');
-          final mLng = double.tryParse(item['lon']?.toString() ?? '');
-          if (mLat != null && mLng != null) {
-            final rawName = (item['display_name']?.toString() ?? 'مسجد').split(',').first.trim();
-            addMosque(rawName.isEmpty ? 'مسجد' : rawName, mLat, mLng);
-          }
-        }
-      }
-    } catch (_) {}
-
-    // المحرك الثاني: Overpass GET لتعزيز النتائج
-    if (results.length < 5) {
+    // Nominatim OpenStreetMap (سريع وموثوق جداً عبر GET).
+    //
+    // WHY Arabic queries: the old `q=mosque` (English) is a free-text
+    // name search — Syrian mosques are tagged with Arabic names, so it
+    // returned exactly ONE mosque near Muadamiyah (جامع الزيتونة,
+    // 2.8 km) while 22 named mosques sit within 8 km (verified live
+    // 2026-11-16). `q=جامع` alone returns 18; `q=مسجد` adds 5 more
+    // (after the name filter below). The old Overpass fallback is
+    // REMOVED: all four public Overpass endpoints are unusable from
+    // here (kumi: 25s+ timeout, api.de: HTTP 406 on GET and POST,
+    // private.coffee: 30s timeout, nchc: unreachable) — it only ever
+    // burned 10 s and delivered nothing.
+    const queries = [('جامع', false), ('مسجد', true)];
+    for (final (query, requireWord) in queries) {
       try {
-        final q = '[out:json][timeout:10];(nwr["amenity"="place_of_worship"]["religion"="muslim"](around:4000,${widget.lat},${widget.lng});nwr["building"="mosque"](around:4000,${widget.lat},${widget.lng}););out center;';
-        final url = Uri.parse('https://overpass.kumi.systems/api/interpreter?data=${Uri.encodeComponent(q)}');
-        final res = await http.get(url, headers: {'User-Agent': 'NoorQuranApp/1.0'}).timeout(const Duration(seconds: 10));
+        // Viewbox ±0.075° ≈ ±8 km, matching the 8 km distance filter.
+        const delta = 0.075;
+        final viewbox =
+            '${widget.lng - delta},${widget.lat + delta},${widget.lng + delta},${widget.lat - delta}';
+        final url = Uri.parse(
+          'https://nominatim.openstreetmap.org/search?q=${Uri.encodeComponent(query)}&format=json&bounded=1&viewbox=$viewbox&limit=50&accept-language=ar',
+        );
+        final res = await http
+            .get(url, headers: {
+              'User-Agent': 'NoorQuranApp/1.0 (syria.noor.quran)'
+            })
+            .timeout(const Duration(seconds: 10));
         if (res.statusCode == 200) {
-          final data = json.decode(utf8.decode(res.bodyBytes));
-          final elements = (data['elements'] as List?) ?? [];
-          for (final el in elements) {
-            final double? mLat = (el['lat'] as num?)?.toDouble() ?? (el['center']?['lat'] as num?)?.toDouble();
-            final double? mLng = (el['lon'] as num?)?.toDouble() ?? (el['center']?['lon'] as num?)?.toDouble();
-            if (mLat != null && mLng != null) {
-              final tags = (el['tags'] as Map?) ?? {};
-              final name = tags['name:ar'] ?? tags['name'] ?? 'مسجد';
-              addMosque(name.toString(), mLat, mLng);
-            }
+          final list = json.decode(utf8.decode(res.bodyBytes)) as List;
+          for (final m in parseNominatimMosques(
+            list,
+            widget.lat,
+            widget.lng,
+            requireMosqueWord: requireWord,
+          )) {
+            addMosque(
+              m['name'] as String,
+              m['lat'] as double,
+              m['lng'] as double,
+            );
           }
         }
       } catch (_) {}
