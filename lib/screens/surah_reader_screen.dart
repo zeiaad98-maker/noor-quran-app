@@ -2,14 +2,22 @@ import 'dart:async';
 
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:fluttertoast/fluttertoast.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:just_audio/just_audio.dart';
 import 'package:qcf_quran/qcf_quran.dart';
 import 'package:quran/quran.dart' as quran;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
+import '../data/audio_player_controller.dart';
+import '../data/ayah_notes.dart';
 import '../main.dart';
+import '../widgets/audio_player_sheet.dart';
+import '../widgets/ayah_action_sheet.dart';
+import '../widgets/noor_qcf_page.dart';
 import '../widgets/quran_search_sheet.dart';
+import '../widgets/surah_name_image.dart';
+import 'notes_screen.dart';
 
 /// Full-screen Mushaf reader — QCF text rendering (Madina Mushaf font),
 /// works fully offline (fonts are bundled in the qcf_quran package).
@@ -27,20 +35,17 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
   int _currentPage = 1;
   bool _showControls = false;
   bool _isBookmarked = false;
-  double _pageZoom = 1.12;
-  late final AudioPlayer _audioPlayer;
-  bool _isPlayingAudio = false;
-  int _currentReciterIndex = 0;
+  // Mushaf zoom: 1.0 = the size the QCF fonts are calibrated for.
+  // Anything far from 1.0 breaks the Madinah line breaks, so the range
+  // is deliberately narrow (0.92..1.08). See _qcfSp below.
+  double _pageZoom = 1.0;
+  late final AudioPlayerController _audioController;
+  // True while a page jump was caused by the player following the
+  // playing ayah; such jumps must NOT stop the playback.
+  bool _playerDrivenPageChange = false;
+  Set<String> _notedAyahIds = {};
   Timer? _clockTimer;
   String _currentTime = '';
-
-  static const List<Map<String, String>> _reciters = [
-    {'name': 'محمود الحصري', 'server': 'server13.mp3quran.net/husr'},
-    {'name': 'مشاري العفاسي', 'server': 'server8.mp3quran.net/afs'},
-    {'name': 'محمد صديق المنشاوي', 'server': 'server10.mp3quran.net/minsh'},
-    {'name': 'عبد الباسط عبد الصمد', 'server': 'server7.mp3quran.net/basit'},
-    {'name': 'ماهر المعيقلي', 'server': 'server12.mp3quran.net/maher'},
-  ];
 
   static const List<String> _juzNamesArabic = [
     'الجزء الأول',
@@ -83,22 +88,45 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
             ? quran.getPageNumber(widget.surahNumber!, 1)
             : 1);
     _pageController = PageController(initialPage: _currentPage - 1);
-    _audioPlayer = AudioPlayer();
-    _loadSettings();
-    _updateClock();
-    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) => _updateClock());
-    _audioPlayer.playerStateStream.listen((state) {
-      if (mounted && state.processingState == ProcessingState.completed) {
-        setState(() => _isPlayingAudio = false);
-      }
+    _audioController = AudioPlayerController();
+    // The player sheet and the top-bar play icon rebuild from this.
+    _audioController.addListener(() {
+      if (mounted) setState(() {});
     });
+    _audioController.onAyahChanged = (ayah) {
+      final page = quran.getPageNumber(ayah.$1, ayah.$2);
+      if (page != _currentPage) {
+        _playerDrivenPageChange = true;
+        _pageController.jumpToPage(page - 1);
+      }
+    };
+    _audioController.onError = (message, retry) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          action: SnackBarAction(
+            label: 'إعادة المحاولة',
+            onPressed: () => unawaited(retry()),
+          ),
+        ),
+      );
+    };
+    // Keep the screen on while reading / reciting.
+    unawaited(WakelockPlus.enable());
+    _loadSettings();
+    _loadNotedAyahs();
+    _updateClock();
+    _clockTimer =
+        Timer.periodic(const Duration(seconds: 1), (_) => _updateClock());
   }
 
   @override
   void dispose() {
+    unawaited(WakelockPlus.disable());
     _clockTimer?.cancel();
     _pageController.dispose();
-    _audioPlayer.dispose();
+    _audioController.dispose();
     super.dispose();
   }
 
@@ -111,12 +139,22 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
     if (mounted) setState(() => _currentTime = '$h:$m:$s $period');
   }
 
+  Future<void> _loadNotedAyahs() async {
+    final ids = await AyahNotes.notedIds();
+    if (mounted) setState(() => _notedAyahIds = ids);
+  }
+
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
     setState(() {
       _isBookmarked = prefs.getInt('bookmarked_page') == _currentPage;
-      _pageZoom = prefs.getDouble('mushaf_page_zoom') ?? 1.12;
+      // Migrate old zoom values (previously 1.12 default, up to 1.28)
+      // into the narrow range that keeps the Mushaf line breaks intact.
+      _pageZoom =
+          (prefs.getDouble('mushaf_page_zoom') ?? 1.0).clamp(0.92, 1.08);
+      _audioController.setInitialReciterIndex(
+          prefs.getInt('reciter_index') ?? 0);
     });
   }
 
@@ -139,6 +177,14 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
       _currentPage = page;
       _showControls = false;
     });
+    // A manual page change stops the audio so it always matches what
+    // is on screen — except when the player itself jumped here while
+    // following the playing ayah.
+    if (_playerDrivenPageChange) {
+      _playerDrivenPageChange = false;
+    } else {
+      unawaited(_audioController.stop());
+    }
     _saveLastRead();
     SharedPreferences.getInstance().then((prefs) {
       if (mounted) {
@@ -159,7 +205,16 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
     } else {
       await prefs.setInt('bookmarked_page', _currentPage);
     }
-    if (mounted) setState(() => _isBookmarked = !_isBookmarked);
+    if (mounted) {
+      setState(() => _isBookmarked = !_isBookmarked);
+      unawaited(Fluttertoast.showToast(
+        msg: _isBookmarked ? 'تمت إضافة العلامة' : 'تم حذف العلامة',
+        toastLength: Toast.LENGTH_SHORT,
+        gravity: ToastGravity.BOTTOM,
+        backgroundColor: const Color(0xFF0D6E52),
+        textColor: Colors.white,
+      ));
+    }
   }
 
   void _openInMushafSearch() {
@@ -212,11 +267,13 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                 segments: [
                   ButtonSegment<bool>(
                     value: false,
-                    label: Text('ورقي كريمي', style: GoogleFonts.amiri(fontSize: 14)),
+                    label: Text('ورقي كريمي',
+                        style: GoogleFonts.amiri(fontSize: 14)),
                   ),
                   ButtonSegment<bool>(
                     value: true,
-                    label: Text('ليلي مريح', style: GoogleFonts.amiri(fontSize: 14)),
+                    label: Text('ليلي مريح',
+                        style: GoogleFonts.amiri(fontSize: 14)),
                   ),
                 ],
                 selected: <bool>{isDark},
@@ -243,7 +300,9 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                         icon: const Icon(Icons.remove_circle_outline),
                         onPressed: () {
                           setState(() {
-                            _pageZoom = (_pageZoom - 0.04) < 1.0 ? 1.0 : _pageZoom - 0.04;
+                            _pageZoom = (_pageZoom - 0.04) < 0.92
+                                ? 0.92
+                                : _pageZoom - 0.04;
                           });
                           _saveZoom();
                         },
@@ -260,7 +319,9 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                         icon: const Icon(Icons.add_circle_outline),
                         onPressed: () {
                           setState(() {
-                            _pageZoom = (_pageZoom + 0.04) > 1.28 ? 1.28 : _pageZoom + 0.04;
+                            _pageZoom = (_pageZoom + 0.04) > 1.08
+                                ? 1.08
+                                : _pageZoom + 0.04;
                           });
                           _saveZoom();
                         },
@@ -277,6 +338,14 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                   color: Colors.grey,
                 ),
               ),
+              const SizedBox(height: 4),
+              Text(
+                'تكبير الخط كثيراً يغيّر فواصل الأسطر عن مصحف المدينة — الأفضل 100%',
+                style: GoogleFonts.amiri(
+                  fontSize: 13,
+                  color: Colors.grey,
+                ),
+              ),
             ],
           ),
         );
@@ -284,53 +353,67 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
     );
   }
 
-  Future<void> _toggleAudioPlay() async {
-    if (_isPlayingAudio) {
-      await _audioPlayer.pause();
-      setState(() => _isPlayingAudio = false);
-      return;
+  /// Opens the audio player sheet, preset to [scope], and starts
+  /// playing immediately. The reader play button opens it on the
+  /// current page; the ayah sheet opens it on that ayah; a tapped
+  /// word opens it on that word.
+  void _openPlayerSheet({
+    required PlayerScope scope,
+    int? surah,
+    int? verse,
+    int? wordIndex,
+  }) {
+    switch (scope) {
+      case PlayerScope.word:
+        unawaited(_audioController.playWord(surah!, verse!, wordIndex!));
+      case PlayerScope.ayah:
+        unawaited(_audioController.playAyah(surah!, verse!));
+      case PlayerScope.page:
+        unawaited(
+            _audioController.playPages(_currentPage, _currentPage));
+      case PlayerScope.surah:
+        unawaited(_audioController.playSurah(surah!));
     }
-    try {
-      final pageData = quran.getPageData(_currentPage);
-      final surah = pageData.isNotEmpty ? pageData[0]['surah'] as int : 1;
-      final server = _reciters[_currentReciterIndex]['server']!;
-      final url =
-          'https://$server/${surah.toString().padLeft(3, '0')}.mp3';
-      await _audioPlayer.setUrl(url);
-      await _audioPlayer.play();
-      setState(() => _isPlayingAudio = true);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تعذر تشغيل الصوت — تحقق من الإنترنت')),
-        );
-      }
-    }
-  }
-
-  void _pickReciter() {
     showModalBottomSheet(
       context: context,
-      builder: (context) => Container(
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (int i = 0; i < _reciters.length; i++)
-              ListTile(
-                title: Text(_reciters[i]['name']!),
-                trailing: i == _currentReciterIndex
-                    ? const Icon(Icons.check, color: Color(0xFF0D6E52))
-                    : null,
-                onTap: () {
-                  setState(() => _currentReciterIndex = i);
-                  Navigator.of(context).pop();
-                },
-              ),
-          ],
-        ),
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => AudioPlayerSheet(
+        controller: _audioController,
+        currentPage: _currentPage,
       ),
     );
+  }
+
+  void _openAyahSheet(int surah, int verse) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => AyahActionSheet(
+        surahNumber: surah,
+        verseNumber: verse,
+        pageNumber: _currentPage,
+        onPlayAyah: () => _openPlayerSheet(
+          scope: PlayerScope.ayah,
+          surah: surah,
+          verse: verse,
+        ),
+        onPlayWord: (wordIndex) => _openPlayerSheet(
+          scope: PlayerScope.word,
+          surah: surah,
+          verse: verse,
+          wordIndex: wordIndex,
+        ),
+        onOpenNotesScreen: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const NotesScreen()),
+          ).then((_) => _loadNotedAyahs());
+        },
+        onNoteChanged: _loadNotedAyahs,
+      ),
+    ).then((_) => _loadNotedAyahs());
   }
 
   @override
@@ -340,7 +423,6 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
     final goldColor = const Color(0xFF8A723D);
     final pageData = quran.getPageData(_currentPage);
     final surahNumber = pageData.isNotEmpty ? pageData[0]['surah'] as int : 1;
-    final surahName = quran.getSurahNameArabic(surahNumber);
     final juzNumber = quran.getJuzNumber(surahNumber, 1);
     final juzName = _juzNamesArabic[juzNumber - 1];
     final pageSide = _currentPage % 2 == 0 ? 'يسرى' : 'يمنى';
@@ -349,6 +431,11 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
         ? QcfThemeData.dark().copyWith(
             pageBackgroundColor: bgColor,
             verseNumberColor: const Color(0xFFD2BA80),
+            verseHeight: 2.1,
+            verseBackgroundColor: (surah, verse) =>
+                _notedAyahIds.contains('$surah:$verse')
+                    ? const Color(0xFF8A723D).withValues(alpha: 0.35)
+                    : null,
           )
         : QcfThemeData(
             pageBackgroundColor: bgColor,
@@ -356,7 +443,22 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
             verseNumberColor: goldColor,
             basmalaColor: const Color(0xFF1A1A1A),
             headerTextColor: const Color(0xFF1A1A1A),
+            verseHeight: 2.1,
+            verseBackgroundColor: (surah, verse) =>
+                _notedAyahIds.contains('$surah:$verse')
+                    ? const Color(0xFFFFF3C4).withValues(alpha: 0.7)
+                    : null,
           );
+
+    // Calibrated QCF font scale: the qcf_quran example uses sp = 1.sp
+    // with design width 392.7, i.e. font size grows with screen width.
+    // Do NOT multiply by ScreenUtil .sp (its fontSizeResolver is width,
+    // so _pageZoom.sp was 1.12 x scaleWidth = 1.18) and do NOT let the
+    // system font size scale the Quran text (see MediaQuery below):
+    // either one pushes the font past the size the per-page QCF fonts
+    // are calibrated for, so Mushaf lines wrap and orphan words spill
+    // onto centred lines (v7 feedback).
+    final qcfSp = MediaQuery.of(context).size.width / 392.7 * _pageZoom;
 
     return ScreenUtilInit(
       designSize: const Size(390, 844),
@@ -365,200 +467,258 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
       builder: (_, __) => Scaffold(
         backgroundColor: bgColor,
         body: SafeArea(
-          child: Column(
+          child: Stack(
             children: [
-              AnimatedOpacity(
-                opacity: _showControls ? 1.0 : 0.0,
-                duration: const Duration(milliseconds: 250),
-                child: Container(
-                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        bgColor,
-                        bgColor.withValues(alpha: 0.0),
-                      ],
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.arrow_back),
-                        color: goldColor,
-                        onPressed: () => Navigator.of(context).pop(),
-                      ),
-                      Expanded(
-                        child: Column(
-                          children: [
-                            Text(
-                              surahName,
-                              style: GoogleFonts.amiri(
-                                fontSize: 17.5,
-                                fontWeight: FontWeight.bold,
-                                color: isDark ? Colors.white : const Color(0xFF2D2A26),
-                              ),
-                            ),
-                            Text(
-                              '$juzName • الصفحة $_currentPage من 604',
-                              style: GoogleFonts.amiri(
-                                fontSize: 13,
-                                color: Colors.grey,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      IconButton(
-                        icon: Icon(
-                          _isBookmarked ? Icons.bookmark : Icons.bookmark_border,
-                        ),
-                        color: _isBookmarked ? goldColor : Colors.grey,
-                        onPressed: _toggleBookmark,
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.search),
-                        color: goldColor,
-                        onPressed: _openInMushafSearch,
-                      ),
-                      IconButton(
-                        icon: Icon(
-                          _isPlayingAudio ? Icons.pause : Icons.play_arrow,
-                        ),
-                        color: goldColor,
-                        onPressed: _toggleAudioPlay,
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.settings),
-                        color: goldColor,
-                        onPressed: _showMushafSettingsSheet,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              Expanded(
-                child: Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 2),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            juzName,
-                            style: GoogleFonts.amiri(
-                              fontSize: 16.5,
-                              color: goldColor,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          Text(
-                            _currentTime,
-                            style: GoogleFonts.amiri(
-                              fontSize: 16.5,
-                              color: Colors.grey,
-                            ),
-                          ),
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
+              Column(
+                children: [
+                  Expanded(
+                    child: Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 2),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
+                              IconButton(
+                                icon: Icon(
+                                  _showControls
+                                      ? Icons.visibility
+                                      : Icons.visibility_off,
+                                  size: 20,
+                                ),
+                                color: goldColor,
+                                tooltip: 'إظهار / إخفاء أشرطة التحكم',
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                                onPressed: () {
+                                  setState(
+                                      () => _showControls = !_showControls);
+                                },
+                              ),
                               Text(
-                                surahName,
+                                juzName,
                                 style: GoogleFonts.amiri(
                                   fontSize: 16.5,
                                   color: goldColor,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
-                              const SizedBox(width: 6),
                               Text(
-                                '($pageSide)',
+                                _currentTime,
                                 style: GoogleFonts.amiri(
-                                  fontSize: 13,
+                                  fontSize: 16.5,
                                   color: Colors.grey,
                                 ),
                               ),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  SurahNameImage(
+                                    surahNumber: surahNumber,
+                                    height: 24,
+                                    isDark: isDark,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    '($pageSide)',
+                                    style: GoogleFonts.amiri(
+                                      fontSize: 13,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ],
+                          ),
+                        ),
+                        Expanded(
+                          // System font size must not scale the Mushaf text:
+                          // the QCF page fonts are calibrated for one exact
+                          // size, and any scaling breaks the line breaks.
+                          child: MediaQuery(
+                            data: MediaQuery.of(context).copyWith(
+                              textScaler: TextScaler.noScaling,
+                            ),
+                            // NoorQcfPage: local copy of the package page
+                            // widget that keeps the hard line breaks the
+                            // package drops (see noor_qcf_page.dart).
+                            child: NoorQuranPageView(
+                              controller: _pageController,
+                              initialPageNumber: _currentPage,
+                              sp: qcfSp,
+                              theme: qcfTheme,
+                              onPageChanged: _onPageChanged,
+                              onTap: (surah, verse) =>
+                                  _openAyahSheet(surah, verse),
+                            ),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 6, top: 4),
+                          child: Text(
+                            '$_currentPage'.replaceAllMapped(
+                              RegExp(r'\d'),
+                              (m) => '٠١٢٣٤٥٦٧٨٩'[int.parse(m[0]!)],
+                            ),
+                            style: GoogleFonts.amiri(
+                              fontSize: 17.5,
+                              color: goldColor,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: IgnorePointer(
+                  ignoring: !_showControls,
+                  child: AnimatedOpacity(
+                    opacity: _showControls ? 1.0 : 0.0,
+                    duration: const Duration(milliseconds: 250),
+                    child: Container(
+                      padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            bgColor,
+                            bgColor.withValues(alpha: 0.0),
+                          ],
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.arrow_back),
+                            color: goldColor,
+                            onPressed: () => Navigator.of(context).pop(),
+                          ),
+                          IconButton(
+                            icon: Icon(
+                              _showControls
+                                  ? Icons.visibility
+                                  : Icons.visibility_off,
+                            ),
+                            color: goldColor,
+                            tooltip: 'إظهار / إخفاء الأشرطة',
+                            onPressed: () {
+                              setState(() => _showControls = !_showControls);
+                            },
+                          ),
+                          Expanded(
+                            child: Column(
+                              children: [
+                                SurahNameImage(
+                                  surahNumber: surahNumber,
+                                  height: 26,
+                                  isDark: isDark,
+                                ),
+                                Text(
+                                  '$juzName • ${quran.getVerseCount(surahNumber)} آية • الصفحة $_currentPage من 604',
+                                  style: GoogleFonts.amiri(
+                                    fontSize: 13,
+                                    color: Colors.grey,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            icon: Icon(
+                              _isBookmarked
+                                  ? Icons.bookmark
+                                  : Icons.bookmark_border,
+                            ),
+                            color: _isBookmarked ? goldColor : Colors.grey,
+                            onPressed: _toggleBookmark,
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.search),
+                            color: goldColor,
+                            onPressed: _openInMushafSearch,
+                          ),
+                          IconButton(
+                            icon: Icon(
+                              _audioController.isPlaying
+                                  ? Icons.pause
+                                  : Icons.play_arrow,
+                            ),
+                            color: goldColor,
+                            onPressed: () => _openPlayerSheet(
+                              scope: PlayerScope.page,
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.settings),
+                            color: goldColor,
+                            onPressed: _showMushafSettingsSheet,
                           ),
                         ],
                       ),
                     ),
-                    Expanded(
-                      child: PageviewQuran(
-                        controller: _pageController,
-                        initialPageNumber: _currentPage,
-                        sp: _pageZoom.sp,
-                        theme: qcfTheme,
-                        onPageChanged: _onPageChanged,
-                        onTap: (_, __) {
-                          setState(() => _showControls = !_showControls);
-                        },
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 6, top: 4),
-                      child: Text(
-                        '$_currentPage'.replaceAllMapped(
-                          RegExp(r'\d'),
-                          (m) => '٠١٢٣٤٥٦٧٨٩'[int.parse(m[0]!)],
-                        ),
-                        style: GoogleFonts.amiri(
-                          fontSize: 17.5,
-                          color: goldColor,
-                        ),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
-              AnimatedOpacity(
-                opacity: _showControls ? 1.0 : 0.0,
-                duration: const Duration(milliseconds: 250),
-                child: Container(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.bottomCenter,
-                      end: Alignment.topCenter,
-                      colors: [
-                        bgColor,
-                        bgColor.withValues(alpha: 0.0),
-                      ],
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: IgnorePointer(
+                  ignoring: !_showControls,
+                  child: AnimatedOpacity(
+                    opacity: _showControls ? 1.0 : 0.0,
+                    duration: const Duration(milliseconds: 250),
+                    child: Container(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.bottomCenter,
+                          end: Alignment.topCenter,
+                          colors: [
+                            bgColor,
+                            bgColor.withValues(alpha: 0.0),
+                          ],
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          TextButton.icon(
+                            onPressed: () => _openPlayerSheet(
+                              scope: PlayerScope.page,
+                            ),
+                            icon: const Icon(Icons.person, size: 18),
+                            label: Text(
+                              _audioController.reciter.name,
+                              style: GoogleFonts.amiri(fontSize: 14),
+                            ),
+                          ),
+                          TextButton.icon(
+                            onPressed: () =>
+                                unawaited(_audioController.stop()),
+                            icon: const Icon(Icons.stop, size: 18),
+                            label: Text(
+                              'إيقاف الصوت',
+                              style: GoogleFonts.amiri(fontSize: 14),
+                            ),
+                          ),
+                          TextButton.icon(
+                            onPressed: () => _jumpToPage(_currentPage + 1),
+                            icon: const Icon(Icons.arrow_forward, size: 18),
+                            label: Text(
+                              'الصفحة التالية',
+                              style: GoogleFonts.amiri(fontSize: 14),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      TextButton.icon(
-                        onPressed: _pickReciter,
-                        icon: const Icon(Icons.person, size: 18),
-                        label: Text(
-                          _reciters[_currentReciterIndex]['name']!,
-                          style: GoogleFonts.amiri(fontSize: 14),
-                        ),
-                      ),
-                      TextButton.icon(
-                        onPressed: () {
-                          if (_isPlayingAudio) _toggleAudioPlay();
-                          setState(() => _isPlayingAudio = false);
-                        },
-                        icon: const Icon(Icons.stop, size: 18),
-                        label: Text(
-                          'إيقاف الصوت',
-                          style: GoogleFonts.amiri(fontSize: 14),
-                        ),
-                      ),
-                      TextButton.icon(
-                        onPressed: () => _jumpToPage(_currentPage + 1),
-                        icon: const Icon(Icons.arrow_forward, size: 18),
-                        label: Text(
-                          'الصفحة التالية',
-                          style: GoogleFonts.amiri(fontSize: 14),
-                        ),
-                      ),
-                    ],
                   ),
                 ),
               ),

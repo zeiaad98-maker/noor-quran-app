@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:quran/quran.dart' as quran;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../widgets/surah_name_image.dart';
 import 'surah_reader_screen.dart';
 
 class SurahListScreen extends StatefulWidget {
@@ -84,7 +85,6 @@ class _SurahListScreenState extends State<SurahListScreen> {
             separatorBuilder: (_, __) => const Divider(height: 1, indent: 72),
             itemBuilder: (context, index) {
               final surahNum = filteredSurahs[index];
-              final nameAr = quran.getSurahNameArabic(surahNum);
               final verseCount = quran.getVerseCount(surahNum);
               final pageNum = quran.getPageNumber(surahNum, 1);
               final place = quran.getPlaceOfRevelation(surahNum) == 'Makkah' ? 'مكية' : 'مدنية';
@@ -100,7 +100,14 @@ class _SurahListScreenState extends State<SurahListScreen> {
                     ),
                   ),
                 ),
-                title: Text('سورة $nameAr', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
+                title: Align(
+                  alignment: Alignment.centerRight,
+                  child: SurahNameImage(
+                    surahNumber: surahNum,
+                    height: 30,
+                    isDark: Theme.of(context).brightness == Brightness.dark,
+                  ),
+                ),
                 subtitle: Text('$place • $verseCount آية • صفحة $pageNum'),
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () => _openSurah(surahNum),

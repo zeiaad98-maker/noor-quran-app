@@ -12,6 +12,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import '../main.dart';
+import '../data/khatma_plan.dart';
+import 'khatma_screen.dart';
 import 'surah_reader_screen.dart';
 import 'nearby_mosques_screen.dart';
 
@@ -49,6 +51,8 @@ class _HomeScreenState extends State<HomeScreen> {
   late PrayerTimes _prayerTimes;
   int? _lastSurah;
   int? _lastPage;
+  int? _khatmaDone;
+  int? _khatmaTotal;
 
   @override
   void initState() {
@@ -149,6 +153,9 @@ class _HomeScreenState extends State<HomeScreen> {
       _ishaOffset = prefs.getInt('offset_isha') ?? 0;
       _lastSurah = prefs.getInt('last_surah');
       _lastPage = prefs.getInt('last_page');
+      final khatmaPlan = KhatmaPlan.decode(prefs.getString('khatma_plan'));
+      _khatmaDone = khatmaPlan?.completedCount;
+      _khatmaTotal = khatmaPlan?.totalSessions;
       _recalculatePrayers();
     });
   }
@@ -1178,6 +1185,33 @@ class _HomeScreenState extends State<HomeScreen> {
                         builder: (_) => NearbyMosquesScreen(lat: _lat, lng: _lng, cityName: _city),
                       ),
                     ),
+                  ),
+                ),
+
+                const SizedBox(height: 14),
+
+                // 7. بطاقة خطتي للختمة
+                Card(
+                  color: cardBg,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: BorderSide(color: gold.withValues(alpha: 0.3)),
+                  ),
+                  child: ListTile(
+                    leading: const CircleAvatar(
+                      backgroundColor: gold,
+                      child: Icon(Icons.menu_book_rounded, color: Colors.white),
+                    ),
+                    title: const Text('خطتي للختمة', style: TextStyle(fontWeight: FontWeight.bold)),
+                    subtitle: Text(_khatmaTotal != null
+                        ? 'أنجزت ${_toArabicDigits('$_khatmaDone')} من ${_toArabicDigits('$_khatmaTotal')} جلسات'
+                        : 'ابدأ خطة ختمة: 30 أو 15 أو 7 أيام، أو خطة مخصصة'),
+                    trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16, color: gold),
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const KhatmaScreen()),
+                    ).then((_) => _loadSavedSettings()),
                   ),
                 ),
               ],
