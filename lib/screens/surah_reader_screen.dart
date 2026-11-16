@@ -532,25 +532,48 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                           ),
                         ),
                         Expanded(
-                          // System font size must not scale the Mushaf text:
-                          // the QCF page fonts are calibrated for one exact
-                          // size, and any scaling breaks the line breaks.
-                          child: MediaQuery(
-                            data: MediaQuery.of(context).copyWith(
-                              textScaler: TextScaler.noScaling,
-                            ),
-                            // NoorQcfPage: local copy of the package page
-                            // widget that keeps the hard line breaks the
-                            // package drops (see noor_qcf_page.dart).
-                            child: NoorQuranPageView(
-                              controller: _pageController,
-                              initialPageNumber: _currentPage,
-                              sp: qcfSp,
-                              theme: qcfTheme,
-                              onPageChanged: _onPageChanged,
-                              onTap: (surah, verse) =>
-                                  _openAyahSheet(surah, verse),
-                            ),
+                          // The Mushaf must fit vertically: the line
+                          // height factor comes from the ACTUAL height
+                          // the PageView gets (status bar, header,
+                          // footer and nav bar already subtracted by
+                          // the layout), so all 15 lines are visible
+                          // with no scrolling or clipping, on any
+                          // phone size. The font size never changes —
+                          // only the line spacing shrinks a little,
+                          // so the Madinah line breaks are untouched.
+                          // (v9: page 5 lost its last 1.5 lines
+                          // because the old code used a fixed h = 1.0
+                          // and the page was pushed down by the
+                          // status-bar padding — see noor_qcf_page.)
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              final h = mushafHeightFactor(
+                                constraints.maxHeight,
+                                qcfSp,
+                              );
+                              // System font size must not scale the
+                              // Mushaf text: the QCF page fonts are
+                              // calibrated for one exact size, and any
+                              // scaling breaks the line breaks.
+                              return MediaQuery(
+                                data: MediaQuery.of(context).copyWith(
+                                  textScaler: TextScaler.noScaling,
+                                ),
+                                // NoorQcfPage: local copy of the package page
+                                // widget that keeps the hard line breaks the
+                                // package drops (see noor_qcf_page.dart).
+                                child: NoorQuranPageView(
+                                  controller: _pageController,
+                                  initialPageNumber: _currentPage,
+                                  sp: qcfSp,
+                                  h: h,
+                                  theme: qcfTheme,
+                                  onPageChanged: _onPageChanged,
+                                  onTap: (surah, verse) =>
+                                      _openAyahSheet(surah, verse),
+                                ),
+                              );
+                            },
                           ),
                         ),
                         Padding(
