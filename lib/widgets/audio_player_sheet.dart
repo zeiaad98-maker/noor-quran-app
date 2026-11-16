@@ -18,10 +18,15 @@ class AudioPlayerSheet extends StatelessWidget {
   final AudioPlayerController controller;
   final int currentPage;
 
+  /// v12: opens the reciters download screen (optional — the sheet
+  /// is also used in tests without downloads wired up).
+  final VoidCallback? onOpenDownloads;
+
   const AudioPlayerSheet({
     super.key,
     required this.controller,
     required this.currentPage,
+    this.onOpenDownloads,
   });
 
   static const _green = Color(0xFF0D6E52);
@@ -145,6 +150,20 @@ class AudioPlayerSheet extends StatelessWidget {
                     ),
                   ],
                 ),
+                if (onOpenDownloads != null) ...[
+                  const SizedBox(height: 10),
+                  TextButton.icon(
+                    onPressed: onOpenDownloads,
+                    icon: const Icon(Icons.download, size: 18),
+                    label: Text(
+                      'تحميل التلاوات — استمع بدون إنترنت',
+                      style: GoogleFonts.amiri(fontSize: 15),
+                    ),
+                    style: TextButton.styleFrom(
+                      foregroundColor: _green,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

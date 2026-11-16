@@ -7,6 +7,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:quran/quran.dart' as quran;
 
 import '../data/ayah_notes.dart';
+import '../data/qcf_word_map.dart';
 import '../data/word_meanings.dart';
 import 'word_meaning_sheet.dart';
 
@@ -40,20 +41,24 @@ class AyahActionSheet extends StatefulWidget {
 class _AyahActionSheetState extends State<AyahActionSheet> {
   String? _note;
   String? _quarterLabel;
-  /// Uthmani words of this ayah, in audio-segment order (see
-  /// QuranWordData.wordsForAyah). Null while loading: the chips stay
-  /// hidden until it arrives, so a tap can never pass a wrong
-  /// (simple-text) index to the player.
-  List<String>? _words;
+  /// TRUE Uthmani words of this ayah, from the QCF word map (v12 fix).
+  /// The old source (QuranWordData.wordsForAyah, morphology entries)
+  /// merges بَعۡدَ مَا in 2:181, 8:6, 13:37 and إِلۡ يَاسِينَ in
+  /// 37:130 into ONE entry, so the chips after the merge were shifted
+  /// by one and played the wrong word. The word map gives the real
+  /// words, so chip i plays word i + 1 — exactly like the word card.
+  /// Synchronous (pure function on bundled data), so the chips are
+  /// built immediately, no loading spinner.
+  late final List<String> _words;
 
   @override
   void initState() {
     super.initState();
     _loadNote();
-    QuranWordData.wordsForAyah(widget.surahNumber, widget.verseNumber)
-        .then((w) {
-      if (mounted) setState(() => _words = w);
-    });
+    _words = buildQcfWordMap(widget.surahNumber, widget.verseNumber)
+        .words
+        .map((w) => w.text)
+        .toList(growable: false);
     QuranWordData.hizbQuarterLabel(widget.surahNumber, widget.verseNumber)
         .then((label) {
       if (mounted) setState(() => _quarterLabel = label);
@@ -225,38 +230,26 @@ class _AyahActionSheetState extends State<AyahActionSheet> {
               style: GoogleFonts.amiri(fontSize: 14, color: Colors.grey),
             ),
             const SizedBox(height: 6),
-            if (_words == null)
-              const Center(
-                child: Padding(
-                  padding: EdgeInsets.symmetric(vertical: 12),
-                  child: SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(strokeWidth: 2.5),
-                  ),
-                ),
-              )
-            else
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  for (var i = 0; i < _words!.length; i++)
-                    OutlinedButton(
-                      onPressed: () => _openWord(_words![i], i + 1),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 4),
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      child: Text(
-                        _words![i],
-                        style: GoogleFonts.amiri(fontSize: 17),
-                      ),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (var i = 0; i < _words.length; i++)
+                  OutlinedButton(
+                    onPressed: () => _openWord(_words[i], i + 1),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
-                ],
-              ),
+                    child: Text(
+                      _words[i],
+                      style: GoogleFonts.amiri(fontSize: 17),
+                    ),
+                  ),
+              ],
+            ),
             const SizedBox(height: 16),
             const Divider(),
             FilledButton.icon(
