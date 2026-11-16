@@ -3,14 +3,16 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:noor_quran/data/syria_mosques.dart';
 
-/// Offline bundled mosques of Syria (v11).
+/// Offline bundled mosques of Syria (v12).
 ///
 /// The bundled file is the REAL asset shipped in the app
 /// (assets/quran_data/syria_mosques.json), built from the Geofabrik
-/// Syria extract (syria-261115.osm.pbf, 2026-11-15) filtered locally
-/// for amenity=place_of_worship + religion=muslim (+ building=mosque
-/// and name-based catches where the religion tag is missing), deduped
-/// within 50 m. 2,919 mosques: 1,837 named, 1,082 unnamed.
+/// Syria extract (syria-latest.osm.pbf, 2026-11-16) with maximal
+/// extraction (place_of_worship + religion=muslim, building=mosque,
+/// religion=muslim + building/name, name-based catches جامع/مسجد/مصلى,
+/// place_of_worship relations) PLUS the GeoNames Syria dump (S.MSQE,
+/// CC-BY 4.0) merged at 250 m. 3,057 mosques: 1,976 named, 1,081
+/// unnamed.
 ///
 /// These tests are OFFLINE-ONLY: parsing and the nearest query use
 /// pure Dart (no HTTP, no platform channels) — nothing here touches
@@ -18,6 +20,7 @@ import 'package:noor_quran/data/syria_mosques.dart';
 /// * جامع الإيمان, Muadamiyah — 33.4666772, 36.1994628 (user-verified)
 /// * الجامع الأموي, Damascus — ~33.5118, 36.3068
 /// * جامع الزيتونة, Muadamiyah — 33.46329, 36.19778
+/// * جامع بلال, Daraa — 32.60882, 36.09061 (GeoNames-only entry)
 void main() {
   late List<SyriaMosque> all;
 
@@ -36,10 +39,10 @@ void main() {
 
   group('bundled file', () {
     test('count and named/unnamed split', () {
-      expect(all.length, 2919);
+      expect(all.length, 3057);
       final named = all.where((m) => m.name.isNotEmpty).length;
-      expect(named, 1837);
-      expect(all.length - named, 1082);
+      expect(named, 1976);
+      expect(all.length - named, 1081);
     });
 
     test('all coordinates are inside Syria', () {
@@ -59,7 +62,7 @@ void main() {
     test('loads through rootBundle too (the path the app uses)', () async {
       TestWidgetsFlutterBinding.ensureInitialized();
       final loaded = await SyriaMosques.ensureLoaded();
-      expect(loaded.length, 2919);
+      expect(loaded.length, 3057);
     });
   });
 
@@ -89,6 +92,20 @@ void main() {
         SyriaMosques.haversineMeters(m!.lat, m.lng, 33.46329, 36.19778),
         lessThan(100),
       );
+    });
+
+    test('GeoNames-only entry: جامع بلال (Daraa) is present', () {
+      // GeoNames S.MSQE row, 1,043 m from the nearest OSM entry —
+      // the bundle's only mosque in Daraa that OSM does not have.
+      final nearDaraa = SyriaMosques.nearestWithin(all, 32.62, 36.10);
+      expect(
+        nearDaraa.any((e) =>
+            e['name'] == 'جامع بلال' &&
+            (e['distance'] as double) < 2000),
+        isTrue,
+      );
+      // Daraa centre: 10 mosques within 8 km (was 9 in v11).
+      expect(nearDaraa.length, 10);
     });
 
     test('the local جامع عثمان is NOT in OSM — only عثمان بن عفان '
@@ -136,7 +153,7 @@ void main() {
         expect(near[i]['distance'] as double, lessThanOrEqualTo(8000));
       }
       // Richer than the old live search: 22 named mosques in 8 km
-      // via Nominatim, 56 total here (named + unnamed).
+      // via Nominatim, 59 total here (named + unnamed).
       expect(near.length, greaterThan(40));
     });
 

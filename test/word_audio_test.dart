@@ -105,8 +105,11 @@ void main() {
     final words = await QuranWordData.wordsForAyah(2, 33);
     expect(words.length, 22);
     // Word 2 is the SINGLE Uthmani token يَـٰٓـَٔادَمُ (the old simple
-    // split made it two chips: يَا + آدَمُ).
-    expect(QuranWordData.normalizeArabic(words[1]), 'يادم');
+    // split made it two chips: يَا + آدَمُ). Its normalized form is
+    // 'ياادم' — the dagger alef is a real alef here (the vocative
+    // يَا + آدَمُ); the v12 normalizeArabic fix keeps it instead of
+    // stripping it (the old expectation 'يادم' lost that letter).
+    expect(QuranWordData.normalizeArabic(words[1]), 'ياادم');
     expect(QuranWordData.normalizeArabic(words[21]), 'تكتمون');
     // And the pause mark is attached to its word, not a token.
     expect(words.any((w) => w.trim() == 'ۖ'), isFalse);

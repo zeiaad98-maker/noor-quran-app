@@ -13,6 +13,14 @@ import 'package:noor_quran/data/word_meanings.dart';
 ///   77,429 / 77,429 = 100% with a non-blank gloss.
 /// The gloss is NEVER blank: every one of the 77,429 words has either a
 /// meaning or its (real, bundled) morphology description.
+///
+/// v12 — dagger-alef fix (normalizeArabic: ٰ -> ا, except on ى):
+///   withGharib 9,079 -> 9,851 (+772: words whose Uthmani spelling
+///   uses a dagger alef where the غريب entry has a plain alef, e.g.
+///   مُّحۡكَمَٰتٌ = مُّحْكَمَاتٌ). withMeaning 49,064 -> 49,054
+///   (-10: a few words whose غريب entries spell them WITHOUT the
+///   alef the dagger represents, e.g. ذَٰلِكَ vs ذَلِكَ — they keep
+///   their morphology gloss, so withGloss stays 100%).
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -25,12 +33,13 @@ void main() {
         'withLexicon=${stats.withLexicon} withMeaning=${stats.withMeaning} '
         'withGloss=${stats.withGloss}');
     expect(stats.total, 77429);
-    // غريب القرآن alone covered 9,079 (11.7%) before the lexicon.
-    expect(stats.withGharib, 9079);
+    // غريب القرآن alone covered 9,079 (11.7%) before the lexicon,
+    // 9,851 after the v12 dagger-alef fix (see the header comment).
+    expect(stats.withGharib, 9851);
     // مفردات الراغب (root lexicon) covers 46,199 words on its own.
     expect(stats.withLexicon, 46199);
-    // Combined meaning coverage: غريب ∪ lexicon = 49,064 (63.4%).
-    expect(stats.withMeaning, 49064);
+    // Combined meaning coverage: غريب ∪ lexicon = 49,054 (63.4%).
+    expect(stats.withMeaning, 49054);
     // A gloss exists for EVERY word (meaning or morphology description).
     expect(stats.withGloss, stats.total);
   });
