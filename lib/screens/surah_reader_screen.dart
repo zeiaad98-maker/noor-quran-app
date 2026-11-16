@@ -9,8 +9,10 @@ import 'package:quran/quran.dart' as quran;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import '../data/audio_downloads.dart';
 import '../data/audio_player_controller.dart';
 import '../data/ayah_notes.dart';
+import '../data/tafsir_downloads.dart';
 import '../main.dart';
 import '../widgets/audio_player_sheet.dart';
 import '../widgets/ayah_action_sheet.dart';
@@ -18,8 +20,9 @@ import '../widgets/mini_audio_bar.dart';
 import '../widgets/noor_qcf_page.dart';
 import '../widgets/quran_search_sheet.dart';
 import '../widgets/surah_name_image.dart';
-import '../widgets/word_popup.dart';
+import '../widgets/word_card.dart';
 import 'notes_screen.dart';
+import 'reciters_screen.dart';
 
 /// Full-screen Mushaf reader — QCF text rendering (Madina Mushaf font),
 /// works fully offline (fonts are bundled in the qcf_quran package).
@@ -42,6 +45,12 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
   // is deliberately narrow (0.92..1.08). See _qcfSp below.
   double _pageZoom = 1.0;
   late final AudioPlayerController _audioController;
+  // Offline reciter downloads (v12): one instance shared by the
+  // player (plays local files when present) and the reciters screen.
+  late final AudioDownloadService _downloadsService;
+  // The six tafsirs (v12): الميسر bundled, the other five
+  // download-on-demand. One instance for the whole reader.
+  late final TafsirService _tafsirService;
   // True while a page jump was caused by the player following the
   // playing ayah; such jumps must NOT stop the playback.
   bool _playerDrivenPageChange = false;
@@ -95,7 +104,11 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
             ? quran.getPageNumber(widget.surahNumber!, 1)
             : 1);
     _pageController = PageController(initialPage: _currentPage - 1);
-    _audioController = AudioPlayerController();
+    _downloadsService = AudioDownloadService();
+    unawaited(_downloadsService.init());
+    _audioController = AudioPlayerController(downloads: _downloadsService);
+    _tafsirService = TafsirService();
+    unawaited(_tafsirService.init());
     // The player sheet and the top-bar play icon rebuild from this.
     _audioController.addListener(() {
       if (mounted) setState(() {});
@@ -134,6 +147,8 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
     _clockTimer?.cancel();
     _pageController.dispose();
     _audioController.dispose();
+    _downloadsService.dispose();
+    _tafsirService.dispose();
     super.dispose();
   }
 
@@ -389,6 +404,17 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
       builder: (_) => AudioPlayerSheet(
         controller: _audioController,
         currentPage: _currentPage,
+        onOpenDownloads: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => RecitersScreen(
+                service: _downloadsService,
+                currentReciterIndex: _audioController.reciterIndex,
+              ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -424,33 +450,52 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
     ).then((_) => _loadNotedAyahs());
   }
 
-  /// Word popup (v10): opened by tapping a single word on the page.
+  /// Word card (v12 — replaces the v10/v11 tabbed popup): opened by
+  /// tapping a single word on the page. One small card, no tabs:
+  /// word + meaning, toolbar swaps المعنى/صرف/إعراب inside the card.
   /// [wordIndex] is the TRUE 0-based Uthmani word index from the QCF
-  /// word map; the audio controller takes a 1-based word position
-  /// (the ayah sheet passes i + 1), so the play callback adds 1.
-  /// Tapping the verse-end number glyph still opens the ayah sheet
-  /// ([_openAyahSheet]) — that is the way to notes / ayah audio.
+  /// word map; the audio controller takes a 1-based word position,
+  /// so the play callback adds 1.
   ///
-  /// v11: استماع in the popup plays the single word DIRECTLY and
-  /// shows the compact mini-player bar docked at the bottom of the
-  /// reader — it does NOT open the full player sheet. (The popup
-  /// itself closes on استماع, so the docked bar is visible: a Dialog
-  /// is modal and the bar sits behind it.) The reader's own audio
-  /// button and the ayah sheet still open the full sheet.
-  void _openWordPopup(int surah, int verse, int wordIndex) {
-    showWordPopup(
+  /// Tapping the verse-end number glyph opens the TAFSIR card
+  /// ([_openTafsirCard]) — that is the way to the tafsir / notes /
+  /// ayah audio now.
+  ///
+  /// استماع in the card plays the single word DIRECTLY and shows the
+  /// compact mini-player bar docked at the bottom of the reader — it
+  /// does NOT open the full player sheet. (The card itself closes on
+  /// استماع, so the docked bar is visible: a Dialog is modal and the
+  /// bar sits behind it.) The reader's own audio button and the ayah
+  /// sheet still open the full sheet.
+  void _openWordCard(int surah, int verse, int wordIndex) {
+    showWordCard(
       context: context,
       surah: surah,
       verse: verse,
       wordIndex: wordIndex,
-      audioController: _audioController,
-      isBookmarked: _isBookmarked,
-      onToggleBookmark: _toggleBookmark,
-      onOpenSettings: _showMushafSettingsSheet,
       onPlayWord: (word) {
         unawaited(_audioController.playWord(surah, verse, word + 1));
         if (mounted) setState(() => _showMiniBar = true);
       },
+    );
+  }
+
+  /// Tafsir card (v12): opened by tapping the verse-end number glyph
+  /// ۝. Ayah in a cream box + the selected tafsir (selector pill
+  /// switches between the six) + أسباب النزول when the ayah has an
+  /// entry. استمع للآية opens the full player; ملاحظاتي opens the
+  /// old ayah sheet (notes / word chips / ayah audio).
+  void _openTafsirCard(int surah, int verse) {
+    showTafsirCard(
+      context: context,
+      surah: surah,
+      verse: verse,
+      tafsirService: _tafsirService,
+      onPlayAyah: () => _openPlayerSheet(
+        scope: PlayerScope.ayah,
+        surah: surah,
+        verse: verse,
+      ),
       onOpenNotes: () => _openAyahSheet(surah, verse),
     );
   }
@@ -609,9 +654,9 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                                   theme: qcfTheme,
                                   onPageChanged: _onPageChanged,
                                   onTap: (surah, verse) =>
-                                      _openAyahSheet(surah, verse),
+                                      _openTafsirCard(surah, verse),
                                   onWordTap: (surah, verse, wordIndex) =>
-                                      _openWordPopup(surah, verse, wordIndex),
+                                      _openWordCard(surah, verse, wordIndex),
                                 ),
                               );
                             },
@@ -706,6 +751,15 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                             icon: const Icon(Icons.search),
                             color: goldColor,
                             onPressed: _openInMushafSearch,
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.info_outline),
+                            color: goldColor,
+                            tooltip: 'عن السورة',
+                            onPressed: () => showSurahSciencesSheet(
+                              context: context,
+                              surah: surahNumber,
+                            ),
                           ),
                           IconButton(
                             icon: Icon(

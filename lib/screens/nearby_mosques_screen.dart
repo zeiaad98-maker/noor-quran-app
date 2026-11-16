@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -6,6 +7,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
+import '../data/mosque_route.dart';
 import '../data/syria_mosques.dart';
 
 class NearbyMosquesScreen extends StatefulWidget {
@@ -69,6 +71,10 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
   final MapController _mapController = MapController();
   bool _isLoading = true;
   List<Map<String, dynamic>> _mosques = [];
+  // v12 route: the tapped mosque + the drawn way to it.
+  Map<String, dynamic>? _selectedMosque;
+  MosqueRoute? _route;
+  bool _routeLoading = false;
 
   @override
   void initState() {
@@ -92,7 +98,7 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
     }
 
     // PRIMARY SOURCE — offline bundled data (ALL mosques of Syria,
-    // assets/quran_data/syria_mosques.json, 2,919 mosques). No network,
+    // assets/quran_data/syria_mosques.json, 3,057 mosques). No network,
     // works anywhere in Syria. If the asset fails to load, the
     // Nominatim fallback below still runs, so the screen is never
     // left empty because of a bad asset.
@@ -175,6 +181,42 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
     await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
+  /// Draws the route from the user's location to the tapped mosque
+  /// (v12): the OSRM road route when online, the straight dashed
+  /// line when offline or OSRM fails. The map fits the whole route.
+  Future<void> _showRoute(Map<String, dynamic> m) async {
+    final target = LatLng(m['lat'] as double, m['lng'] as double);
+    final userPoint = LatLng(widget.lat, widget.lng);
+    setState(() {
+      _selectedMosque = m;
+      _route = null;
+      _routeLoading = true;
+    });
+    final road = await fetchOsrmRoute(userPoint, target);
+    if (!mounted) return;
+    final route = road ??
+        straightRoute(userPoint, target, m['distance'] as double);
+    setState(() {
+      _route = route;
+      _routeLoading = false;
+    });
+    _mapController.fitCamera(
+      CameraFit.bounds(
+        bounds: LatLngBounds.fromPoints(route.points),
+        padding: const EdgeInsets.all(60),
+        maxZoom: 16.5,
+      ),
+    );
+  }
+
+  void _clearRoute() {
+    setState(() {
+      _selectedMosque = null;
+      _route = null;
+      _routeLoading = false;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     const emerald = Color(0xFF0C6E52);
@@ -212,8 +254,56 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
                   urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                   userAgentPackageName: 'com.noor.quran',
                 ),
+                // The route to the tapped mosque (v12): green solid
+                // road route when online, gold dashed straight line
+                // when offline. Drawn under the pins.
+                if (_route != null)
+                  PolylineLayer(
+                    polylines: [
+                      Polyline(
+                        points: _route!.points,
+                        strokeWidth: _route!.isRoad ? 4.5 : 3.5,
+                        color: _route!.isRoad ? emerald : gold,
+                        pattern: _route!.isRoad
+                            ? const StrokePattern.solid()
+                            : StrokePattern.dashed(
+                                segments: const [10, 6]),
+                      ),
+                    ],
+                  ),
                 MarkerLayer(
                   markers: [
+                    // Arrowhead on the last stretch of the route
+                    // (midpoint of the last segment, so it never
+                    // hides behind the mosque pin).
+                    if (_route != null && _route!.points.length >= 2)
+                      Marker(
+                        point: LatLng(
+                          (_route!.points[_route!.points.length - 2]
+                                      .latitude +
+                                  _route!.points.last.latitude) /
+                              2,
+                          (_route!.points[_route!.points.length - 2]
+                                      .longitude +
+                                  _route!.points.last.longitude) /
+                              2,
+                        ),
+                        width: 30,
+                        height: 30,
+                        child: Transform.rotate(
+                          angle: segmentBearing(
+                                _route!.points[_route!.points.length - 2],
+                                _route!.points.last,
+                              ) *
+                              math.pi /
+                              180,
+                          child: Icon(
+                            Icons.navigation,
+                            color: _route!.isRoad ? emerald : gold,
+                            size: 26,
+                          ),
+                        ),
+                      ),
                     // دبوس موقع المستخدم الحالي (أزرق)
                     Marker(
                       point: userPoint,
@@ -236,14 +326,7 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
                         width: 40,
                         height: 40,
                         child: GestureDetector(
-                          onTap: () {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('${m['name']} (${_formatDistance(m['distance'])})'),
-                                duration: const Duration(seconds: 2),
-                              ),
-                            );
-                          },
+                          onTap: () => _showRoute(m),
                           child: Container(
                             decoration: BoxDecoration(
                               color: emerald,
@@ -260,6 +343,68 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
               ],
             ),
           ),
+
+          // Route pill (v12): distance + walking time for the
+          // tapped mosque, or a loading note while OSRM answers.
+          if (_routeLoading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  SizedBox(width: 8),
+                  Text('جارٍ تحميل الطريق…'),
+                ],
+              ),
+            )
+          else if (_route != null && _selectedMosque != null)
+            Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: (_route!.isRoad ? emerald : gold)
+                      .withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: _route!.isRoad ? emerald : gold,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.directions_walk_rounded,
+                      size: 20,
+                      color: _route!.isRoad ? emerald : gold,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${_selectedMosque!['name']} — ${_route!.label}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 18),
+                      tooltip: 'مسح الطريق',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      onPressed: _clearRoute,
+                    ),
+                  ],
+                ),
+              ),
+            ),
 
           // 2. قائمة المساجد أسفل الخريطة
           Expanded(
@@ -293,15 +438,13 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
                               side: BorderSide(color: isNearest ? emerald : gold.withValues(alpha: 0.25)),
                             ),
                             child: ListTile(
-                              onTap: () {
-                                _mapController.move(LatLng(m['lat'], m['lng']), 16.5);
-                              },
+                              onTap: () => _showRoute(m),
                               leading: CircleAvatar(
                                 backgroundColor: isNearest ? emerald : gold.withValues(alpha: 0.18),
                                 child: Icon(Icons.mosque_rounded, color: isNearest ? Colors.white : gold),
                               ),
                               title: Text(m['name'], style: const TextStyle(fontWeight: FontWeight.bold)),
-                              subtitle: Text('يبعد عنك: ${_formatDistance(m['distance'])} • اضغط لعرضه على الخريطة'),
+                              subtitle: Text('يبعد عنك: ${_formatDistance(m['distance'])} • اضغط لرسم الطريق إليه'),
                               trailing: IconButton(
                                 icon: const Icon(Icons.directions_walk_rounded, color: emerald),
                                 onPressed: () => _navigateToMosque(m['lat'], m['lng']),
@@ -310,6 +453,16 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
                           );
                         },
                       ),
+          ),
+          // 3. مصدر البيانات — نسبة مطلوبة: بيانات المساجد من
+          // OpenStreetMap (ODbL) و GeoNames (CC-BY 4.0).
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 6),
+            child: Text(
+              'بيانات المساجد: OpenStreetMap و GeoNames',
+              style: TextStyle(fontSize: 11, color: Colors.grey),
+              textAlign: TextAlign.center,
+            ),
           ),
         ],
       ),
