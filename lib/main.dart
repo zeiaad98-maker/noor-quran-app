@@ -5,12 +5,28 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/home_screen.dart';
 import 'screens/surah_list_screen.dart';
 import 'screens/adhkar_tasbeeh_screen.dart';
+import 'services/reminder_service.dart';
 import 'widgets/quran_search_sheet.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
   final isDark = prefs.getBool('is_dark_mode') ?? false;
+  // Daily wird reminder: initialise notifications + timezone, then
+  // restore the saved schedule (without showing a permission dialog —
+  // the permission was already granted when the user enabled it).
+  try {
+    await ReminderService.init();
+    if (prefs.getBool('wird_reminder_enabled') ?? false) {
+      final time =
+          ReminderService.parseTime(prefs.getString('wird_reminder_time'));
+      await ReminderService.scheduleDailyWird(
+        time.hour,
+        time.minute,
+        requestPermission: false,
+      );
+    }
+  } catch (_) {}
   runApp(NoorQuranApp(initialDarkMode: isDark));
 }
 
