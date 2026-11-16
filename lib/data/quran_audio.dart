@@ -177,6 +177,36 @@ class WordSegment {
   const WordSegment(this.startMs, this.endMs);
 }
 
+/// Parses a Quran.com API v4 verse object into its ordered word
+/// segments (index 0 = first word). Pure function, so it can be
+/// tested against a canned real response.
+///
+/// The API shape (verified live 2026-11-16, verse 2:33, recitation 6):
+/// `verse.audio.segments` is a list of `[wordIndex0, wordIndex1,
+/// startMs, endMs]`, e.g. `[0, 1, 850, 1760]`. Returns null when the
+/// shape is missing or incomplete (a segment index with no entry).
+List<WordSegment>? parseWordSegments(Map<String, dynamic> verseJson) {
+  final audio = verseJson['audio'] as Map<String, dynamic>?;
+  final segments = audio?['segments'] as List<dynamic>?;
+  if (segments == null || segments.isEmpty) return null;
+  // Each segment is [wordIndex0, wordIndex1, startMs, endMs].
+  final byIndex = <int, WordSegment>{};
+  for (final raw in segments) {
+    final seg = raw as List<dynamic>;
+    if (seg.length >= 4) {
+      byIndex[seg[0] as int] = WordSegment(seg[2] as int, seg[3] as int);
+    }
+  }
+  if (byIndex.isEmpty) return null;
+  final ordered = <WordSegment>[];
+  for (var i = 0; i < byIndex.length; i++) {
+    final s = byIndex[i];
+    if (s == null) return null;
+    ordered.add(s);
+  }
+  return ordered;
+}
+
 /// Per-word timestamps of one ayah from Quran.com API v4
 /// (`/verses/by_key/{s}:{a}?audio={recitationId}`), in the reciter's
 /// own voice. Returns the segments in word order (index 0 = first
@@ -197,27 +227,11 @@ Future<List<WordSegment>?> fetchWordSegments(
     final response =
         await http.get(uri).timeout(const Duration(seconds: 15));
     if (response.statusCode != 200) return null;
-    final audio =
+    final verse =
         (jsonDecode(response.body) as Map<String, dynamic>)['verse']
             as Map<String, dynamic>?;
-    final segments = audio?['audio']?['segments'] as List<dynamic>?;
-    if (segments == null || segments.isEmpty) return null;
-    // Each segment is [wordIndex0, wordIndex1, startMs, endMs].
-    final byIndex = <int, WordSegment>{};
-    for (final raw in segments) {
-      final seg = raw as List<dynamic>;
-      if (seg.length >= 4) {
-        byIndex[seg[0] as int] =
-            WordSegment(seg[2] as int, seg[3] as int);
-      }
-    }
-    final ordered = <WordSegment>[];
-    for (var i = 0; i < byIndex.length; i++) {
-      final s = byIndex[i];
-      if (s == null) return null;
-      ordered.add(s);
-    }
-    return ordered;
+    if (verse == null) return null;
+    return parseWordSegments(verse);
   } catch (_) {
     return null;
   }

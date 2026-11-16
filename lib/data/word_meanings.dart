@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/services.dart';
+import 'package:quran/quran.dart' as quran;
 
 /// Offline Quran word data (Quranpedia dumps, bundled under assets/quran_data):
 /// - word meanings (غريب القرآن — السراج في بيان غريب القرآن، مع التبيان كبديل)
@@ -46,7 +47,7 @@ class QuranWordData {
   /// Spaces are removed so multi-word phrases match single tapped words.
   static String normalizeArabic(String input) {
     var s = input;
-    s = s.replaceAll(RegExp(r'[\u064B-\u0652\u0670\u0640\u06D6-\u06ED]'), '');
+    s = s.replaceAll(RegExp(r'[\u064B-\u0655\u0670\u0640\u06D6-\u06ED]'), '');
     s = s.replaceAll('\u0622', '\u0627'); // آ -> ا
     s = s.replaceAll('\u0623', '\u0627'); // أ -> ا
     s = s.replaceAll('\u0625', '\u0627'); // إ -> ا
@@ -58,6 +59,35 @@ class QuranWordData {
   }
 
   static String _key(int surah, int verse) => '$surah:$verse';
+
+  /// Ordered Uthmani words of an ayah, aligned 1:1 with Quran.com's
+  /// word-audio segments (segment i = words[i], 0-based).
+  ///
+  /// Source: the bundled morphology dump (Quranic Arabic Corpus word
+  /// list — Uthmani orthography, e.g. `يَٰٓـَٔادَمُ` is ONE word and the
+  /// pause mark ۖ stays attached to its word). The `quran` package's
+  /// simple text must NOT be used for audio indices: it splits
+  /// `يَا آدَمُ` into two tokens and leaves ۖ as a token of its own,
+  /// so 2:33 has 24 simple tokens but only 22 audio segments — the
+  /// old word chips passed the simple index, playing the wrong word
+  /// and 404-ing on the last chips (v9 word-audio bug).
+  /// Falls back to the simple-text split when the ayah has no
+  /// morphology entry (the dump covers all 6236 ayahs, so this is
+  /// only a safety net).
+  static Future<List<String>> wordsForAyah(int surah, int verse) async {
+    await ensureLoaded();
+    final raw = _morphology![_key(surah, verse)];
+    if (raw == null) {
+      return quran
+          .getVerse(surah, verse)
+          .split(' ')
+          .where((w) => w.isNotEmpty)
+          .toList(growable: false);
+    }
+    return (raw as List<dynamic>)
+        .map((e) => e[0] as String)
+        .toList(growable: false);
+  }
 
   /// All (word, meaning) pairs for an ayah, or empty list.
   static Future<List<(String, String)>> meaningsForAyah(

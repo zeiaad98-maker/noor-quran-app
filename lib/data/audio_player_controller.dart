@@ -6,6 +6,7 @@ import 'package:quran/quran.dart' as quran;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'quran_audio.dart';
+import 'word_meanings.dart';
 
 /// Which slice of the Mushaf the player is playing.
 enum PlayerScope { word, ayah, page, surah }
@@ -138,7 +139,7 @@ class AudioPlayerController extends ChangeNotifier {
     wordIndex = word;
     wordSegments = null;
     wordUsesWbw = false;
-    wordCount = _verseWordCount(surah, ayah);
+    wordCount = await _verseWordCount(surah, ayah);
     _scopePlays = 1;
     await _playCurrent();
   }
@@ -227,13 +228,15 @@ class AudioPlayerController extends ChangeNotifier {
 
   // -- internals -------------------------------------------------------
 
-  int _verseWordCount(int surah, int ayah) {
+  /// Word count of an ayah in AUDIO numbering (Quran.com segments /
+  /// wbw files), i.e. the Uthmani word list — NOT the simple-text
+  /// split, which counts extra tokens (see wordsForAyah). Used as the
+  /// bound for next/previous word, so it can never walk past the last
+  /// audio file and 404.
+  Future<int> _verseWordCount(int surah, int ayah) async {
     if (wordSegments != null) return wordSegments!.length;
-    return quran
-        .getVerse(surah, ayah)
-        .split(' ')
-        .where((w) => w.isNotEmpty)
-        .length;
+    final words = await QuranWordData.wordsForAyah(surah, ayah);
+    return words.length;
   }
 
   Future<void> _nextWord() async {
@@ -251,7 +254,7 @@ class AudioPlayerController extends ChangeNotifier {
     queueIndex = 0;
     wordIndex = 1;
     wordSegments = null;
-    wordCount = _verseWordCount(nextAyah.$1, nextAyah.$2);
+    wordCount = await _verseWordCount(nextAyah.$1, nextAyah.$2);
     onAyahChanged?.call(nextAyah);
     await _playCurrent();
   }
@@ -270,7 +273,7 @@ class AudioPlayerController extends ChangeNotifier {
     queue = [prevAyah];
     queueIndex = 0;
     wordSegments = null;
-    wordCount = _verseWordCount(prevAyah.$1, prevAyah.$2);
+    wordCount = await _verseWordCount(prevAyah.$1, prevAyah.$2);
     wordIndex = wordCount;
     onAyahChanged?.call(prevAyah);
     await _playCurrent();
