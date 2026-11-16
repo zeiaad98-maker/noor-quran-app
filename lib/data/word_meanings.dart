@@ -5,6 +5,8 @@ import 'package:quran/quran.dart' as quran;
 
 /// Offline Quran word data (Quranpedia dumps, bundled under assets/quran_data):
 /// - word meanings (غريب القرآن — السراج في بيان غريب القرآن، مع التبيان كبديل)
+/// - word lexicon (مفردات ألفاظ القرآن للراغب الأصفهاني، ت ٥٠٢هـ،
+///   keyed by normalized root; consulted after غريب القرآن)
 /// - التفسير الميسر (كاملاً، آية بآية)
 /// - simplified morphology / i'rab (Quranic Arabic Corpus via Quranpedia)
 /// - hizb-quarter boundaries (240 quarter starts, from alquran.cloud metadata)
@@ -12,15 +14,27 @@ import 'package:quran/quran.dart' as quran;
 /// All files are loaded lazily on first use and cached in memory.
 class QuranWordData {
   static Map<String, dynamic>? _meanings;
+  static Map<String, dynamic>? _lexicon;
   static Map<String, dynamic>? _tafsir;
   static Map<String, dynamic>? _morphology;
   static List<List<int>>? _quarters;
   static bool _loading = false;
   static Future<void>? _loadFuture;
 
-  static Future<void> ensureLoaded() {
+  /// NOTE (v11, widget tests): the old form returned the shared
+  /// [_loadFuture] directly. A future completed in one zone (real
+  /// async in runAsync, or another test's FakeAsync) never fires its
+  /// callbacks inside a different zone's pump loop, so a popup opened
+  /// in a later test would spin its loader forever. The async fast
+  /// path below returns a fresh future created in the CALLER's zone
+  /// once the data is loaded, so awaits always resolve on the next
+  /// pump. On a real device the behaviour is identical (one extra
+  /// microtask); the cold path is unchanged. [_quarters] is set last
+  /// in [_loadAll], so it is the loaded signal.
+  static Future<void> ensureLoaded() async {
+    if (_quarters != null) return;
     _loadFuture ??= _loadAll();
-    return _loadFuture!;
+    await _loadFuture!;
   }
 
   static Future<void> _loadAll() async {
@@ -28,6 +42,15 @@ class QuranWordData {
     _loading = true;
     final meaningsRaw =
         await rootBundle.loadString('assets/quran_data/word_meanings.json');
+    // The lexicon is optional: a missing/corrupt file must not break
+    // the rest of the word data (meanings, tafsir, morphology).
+    try {
+      final lexRaw =
+          await rootBundle.loadString('assets/quran_data/word_lexicon.json');
+      _lexicon = jsonDecode(lexRaw) as Map<String, dynamic>;
+    } catch (_) {
+      _lexicon = <String, dynamic>{};
+    }
     final tafsirRaw =
         await rootBundle.loadString('assets/quran_data/tafsir_muyassar.json');
     final morphRaw =
@@ -101,11 +124,157 @@ class QuranWordData {
   }
 
   /// Meaning of one tapped word, matched by normalized form.
-  /// Returns null when the word has no special meaning in غريب القرآن.
+  /// غريب القرآن entries come first (ayah-specific); when the word has
+  /// no special meaning there, the root lexicon (مفردات الراغب) is
+  /// consulted. Returns null only when neither source has anything.
   static Future<String?> meaningForWord(
       int surah, int verse, String word) async {
     final entries = await meaningsForAyah(surah, verse);
-    return _matchWord(entries, word);
+    final gharib = _matchWord(entries, word);
+    if (gharib != null) return gharib;
+    return lexiconForWord(surah, verse, word);
+  }
+
+  /// Root (e.g. "نزل") from a morphology description such as
+  /// "فعل ماضٍ، للغائب، الجذر (نزل)، الوزن (أَفْعَلَ)".
+  /// Returns null for words with no root (particles, pronouns, ...).
+  static final _rootRe = RegExp(r'الجذر \(([^)]+)\)');
+
+  static String? _rootOfMorph(String morphDesc) =>
+      _rootRe.firstMatch(morphDesc)?.group(1);
+
+  /// Candidate lexicon keys for a root. The first is the exact
+  /// normalized root; the rest vary a final weak letter (و/ي/ا),
+  /// because the lexicon's headword may spell a weak-final root with
+  /// ا (e.g. root سمو → headword سما), undouble a geminate root
+  /// (أسس → أس، أبب → أبّ), or drop a final weak letter (أخو → أخ).
+  /// Exact matches always win; the order below is the lookup order.
+  static List<String> _rootKeyCandidates(String root) {
+    final base = normalizeArabic(root);
+    final candidates = <String>[base];
+    if (base.isEmpty) return candidates;
+    final last = base[base.length - 1];
+    if (last == 'و' || last == 'ي' || last == 'ا') {
+      for (final rep in ['ا', 'و', 'ي']) {
+        if (rep != last) {
+          candidates.add(base.substring(0, base.length - 1) + rep);
+        }
+      }
+    }
+    if (base.length >= 2 && base[base.length - 1] == base[base.length - 2]) {
+      candidates.add(base.substring(0, base.length - 1));
+    }
+    if (last == 'و' || last == 'ي') {
+      candidates.add(base.substring(0, base.length - 1));
+    }
+    if (base.length == 3 &&
+        (base[1] == 'و' || base[1] == 'ي')) {
+      // Hollow root: medial weak letter spelled ا (كان، مال، دار)،
+      // and with a final hamza spelled ء (شاء، جاء).
+      candidates.add('${base[0]}ا${base[2]}');
+      if (base[2] == 'ا') {
+        candidates.add('${base[0]}اء');
+      }
+    }
+    return candidates.toSet().toList(growable: false);
+  }
+
+  /// Lexicon definition for a word's root, or null when the word has
+  /// no root or its root has no entry in مفردات الراغب.
+  static String? _lexiconLookup(String morphDesc) {
+    final root = _rootOfMorph(morphDesc);
+    if (root == null) return null;
+    for (final candidate in _rootKeyCandidates(root)) {
+      final value = _lexicon![candidate];
+      if (value is String && value.isNotEmpty) return value;
+    }
+    return null;
+  }
+
+  /// Lexicon (مفردات الراغب) definition for one tapped word, via its
+  /// morphology root. Returns null when no entry exists.
+  static Future<String?> lexiconForWord(
+      int surah, int verse, String word) async {
+    final morph = await morphForWord(surah, verse, word);
+    if (morph == null) return null;
+    await ensureLoaded();
+    return _lexiconLookup(morph);
+  }
+
+  /// A gloss for a tapped word that NEVER returns blank for a real word:
+  /// the غريب القرآن meaning when present, else the root-lexicon
+  /// definition, else the (real, bundled) morphology description
+  /// (type/root/pattern — e.g. "حرف جر" for عَلَيْكَ), else a plain
+  /// statement that it is a Quranic word. Nothing here is invented:
+  /// every branch comes from a bundled source.
+  static Future<String> wordGloss(
+      int surah, int verse, String word) async {
+    final meaning = await meaningForWord(surah, verse, word);
+    if (meaning != null && meaning.trim().isNotEmpty) return meaning;
+    final morph = await morphForWord(surah, verse, word);
+    if (morph != null && morph.trim().isNotEmpty) return morph;
+    return 'كلمة من كلمات القرآن الكريم';
+  }
+
+  /// Which source [wordGloss] draws on for this word, so the UI can
+  /// label it honestly: 'gharib' (غريب القرآن), 'lexicon'
+  /// (مفردات الراغب، مادة الجذر), 'morph' (الوصف الصرفي فقط),
+  /// or 'none' (word not found in any bundled source).
+  static Future<String> glossSourceForWord(
+      int surah, int verse, String word) async {
+    final entries = await meaningsForAyah(surah, verse);
+    if (_matchWord(entries, word) != null) return 'gharib';
+    if (await lexiconForWord(surah, verse, word) != null) return 'lexicon';
+    if (await morphForWord(surah, verse, word) != null) return 'morph';
+    return 'none';
+  }
+
+  /// Coverage of the bundled word data over the whole Mushaf, measured
+  /// with the app's own matching logic ([_matchWord] + root lookup):
+  /// total words, words with a غريب القرآن meaning, words with a
+  /// root-lexicon definition, words with either meaning, and words
+  /// with any non-blank gloss (meaning or morphology description).
+  static Future<
+      ({
+        int total,
+        int withGharib,
+        int withLexicon,
+        int withMeaning,
+        int withGloss
+      })> coverageStats() async {
+    await ensureLoaded();
+    var total = 0;
+    var withGharib = 0;
+    var withLexicon = 0;
+    var withMeaning = 0;
+    var withGloss = 0;
+    for (final ayah in _morphology!.entries) {
+      final key = ayah.key;
+      final rawMeanings = _meanings![key];
+      final meaningEntries = rawMeanings == null
+          ? <(String, String)>[]
+          : (rawMeanings as List<dynamic>)
+              .map((e) => (e[0] as String, e[1] as String))
+              .toList(growable: false);
+      for (final w in ayah.value as List<dynamic>) {
+        final word = w[0] as String;
+        final desc = w.length >= 2 ? w[1] as String : '';
+        total++;
+        final hasGharib = _matchWord(meaningEntries, word) != null;
+        final hasLexicon = _lexiconLookup(desc) != null;
+        if (hasGharib) withGharib++;
+        if (hasLexicon) withLexicon++;
+        if (hasGharib || hasLexicon) withMeaning++;
+        if (hasGharib || hasLexicon || desc.isNotEmpty) withGloss++;
+      }
+    }
+    return (
+      total: total,
+      withGharib: withGharib,
+      withLexicon: withLexicon,
+      withMeaning: withMeaning,
+      withGloss: withGloss,
+    );
   }
 
   /// Simplified i'rab / morphology description of one tapped word.

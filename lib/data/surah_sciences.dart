@@ -1,7 +1,6 @@
 import 'dart:convert';
 
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:qcf_quran/qcf_quran.dart';
 import 'package:quran/quran.dart' as quran;
 
@@ -16,20 +15,24 @@ import 'qcf_word_map.dart';
 ///   `get_surah_info` cross-checked against quran.com API v4 —
 ///   0 mismatches. `assets/quran_data/surah_info.json`.
 /// * أسماء السورة + مقاصد السورة: مصاعد النظر للبقاعي (Dalail 1404),
-///   SAMPLE only — Fatiha (1) and Baqarah (2). The توقيفية/اجتهادية
-///   labels were NOT verified, so names ship WITHOUT labels.
-///   `assets/quran_data/surah_sciences_sample.json`.
+///   ALL 114 surahs. Names found for 41 surahs; the other 73 carry an
+///   honest note (البقاعي lists no other names for them). The
+///   توقيفية/اجتهادية labels were NOT verified, so names ship
+///   WITHOUT labels. `assets/quran_data/surah_sciences.json`.
 /// * فضائل السورة: موسوعة فضائل سور وآيات القرآن — القسم الصحيح
-///   (Dalail 144114), SAMPLE only — Fatiha (1) and Baqarah (2),
-///   first sahih hadith each. Same file as above.
+///   (Dalail 144114), ALL 114 surahs. 66 surahs have a باب (62 with a
+///   hadith, 4 whose باب states only "لم يصح ... سوى أنها من المفصل");
+///   the other 48 have no باب and carry an honest note. Same file
+///   as above.
 /// * أسباب النزول (per ayah): صحيح أسباب النزول — إبراهيم العلي
 ///   (MIT dataset, 200 entries / 277 ayah refs / 50 surahs).
 ///   `assets/quran_data/asbab_nuzul.json`.
 /// * الفوائد: OMITTED — no verified source was found (the book in the
 ///   user's screenshot, هدايات القرآن الكريم / المختصر, is not in
 ///   Dalail and no free structured text exists). Never fabricated.
-/// * الترجمات: Sahih International via alquran.cloud, fetched on
-///   demand (not bundled — licence unconfirmed for bundling).
+/// * الترجمات: REMOVED in v11 (Bug I — user order "الترجمات احذفها"):
+///   no translation tab in the popup and no alquran.cloud fetch.
+///   Nothing replaced it.
 ///
 /// Stats (word/letter counts) are computed in-app from the bundled
 /// Quran text, not copied from anywhere: word count = the QCF word
@@ -102,9 +105,16 @@ class SurahSciences {
   static final Map<int, SurahStats> _statsCache = {};
   static Future<void>? _loadFuture;
 
-  static Future<void> ensureLoaded() {
+  /// NOTE (v11, widget tests): same cross-zone point as
+  /// [QuranWordData.ensureLoaded] — the old form returned the shared
+  /// [_loadFuture] directly, and a future completed in another zone
+  /// never fires its callbacks inside a test's pump loop. The async
+  /// fast path returns a fresh caller-zone future once loaded.
+  /// [_asbab] is set last in [_loadAll], so it is the loaded signal.
+  static Future<void> ensureLoaded() async {
+    if (_asbab != null) return;
     _loadFuture ??= _loadAll();
-    return _loadFuture!;
+    await _loadFuture!;
   }
 
   static Future<void> _loadAll() async {
@@ -124,7 +134,7 @@ class SurahSciences {
         ),
     };
     final sciRaw = await rootBundle
-        .loadString('assets/quran_data/surah_sciences_sample.json');
+        .loadString('assets/quran_data/surah_sciences.json');
     final sciJson = jsonDecode(sciRaw) as Map<String, dynamic>;
     _sciences = {
       for (final e in (sciJson['surahs'] as List<dynamic>))
@@ -166,8 +176,10 @@ class SurahSciences {
     return _info![surah];
   }
 
-  /// Names / maqsad / fadail sample for a surah — only Fatiha (1)
-  /// and Baqarah (2) are extracted so far; null for the rest.
+  /// Names / maqsad / fadail for a surah — extracted for all 114
+  /// surahs (names for 41, maqsad 114/114, fadail 114/114; surahs
+  /// without an alternative name or a dedicated fadail باب carry an
+  /// honest source-coverage note instead of a fabricated entry).
   static Future<SurahScience?> scienceForSurah(int surah) async {
     await ensureLoaded();
     return _sciences![surah];
@@ -217,25 +229,5 @@ class SurahSciences {
       }
     }
     return buf.toString();
-  }
-
-  /// English translation (Saheeh International) of one ayah, fetched
-  /// on demand from alquran.cloud (no key). Returns null when offline
-  /// or on any error — the caller shows an offline note instead.
-  /// Source: https://api.alquran.cloud/v1/ayah/{surah}:{ayah}/en.sahih
-  static Future<String?> fetchTranslation(int surah, int verse) async {
-    try {
-      final res = await http
-          .get(Uri.parse(
-              'https://api.alquran.cloud/v1/ayah/$surah:$verse/en.sahih'))
-          .timeout(const Duration(seconds: 15));
-      if (res.statusCode != 200) return null;
-      final json = jsonDecode(res.body) as Map<String, dynamic>;
-      final data = json['data'] as Map<String, dynamic>?;
-      final text = data?['text'] as String?;
-      return (text == null || text.isEmpty) ? null : text;
-    } catch (_) {
-      return null;
-    }
   }
 }
