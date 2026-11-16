@@ -8,24 +8,39 @@ import '../data/qcf_word_map.dart';
 import '../data/surah_sciences.dart';
 import '../data/word_meanings.dart';
 
-/// The word popup: an overlay card over the dimmed Mushaf page
+/// The word popup: a SMALL compact card over the dimmed Mushaf page
 /// (a [Dialog], NOT a bottom sheet), opened by tapping a single word
-/// on the page. Built to the user's reference screenshots:
+/// on the page. Built to the user's reference screenshot (v11):
+/// a small centered card — المعنى pill on top, the word in green
+/// with its meaning directly below, a small icon toolbar — never a
+/// tall 68%-of-screen dialog. The dialog sizes to its content
+/// (max ~60% of screen height, ~85% when expanded) and every tab
+/// and action fits a ~411dp-wide screen with NOTHING cut off:
+/// scope tabs are equal-width segments (no horizontal scroll),
+/// content tabs wrap, the action bar uses Expanded buttons.
 /// * top scope tabs: الكلمة | الآية | الصفحة | علوم السورة
 /// * second content tabs per scope, ONLY where we have verified data:
 ///   - الكلمة: المعنى (غريب القرآن) | الإعراب (مبسّط)
 ///   - الآية: التفسير الميسر (one tab, honestly labelled)
-///   - الصفحة: أسباب النزول (per ayah) | الترجمات (Sahih Intl, API)
+///   - الصفحة: أسباب النزول (per ayah) — the only content tab.
+///     الترجمات was REMOVED entirely in v11 (Bug I, user order
+///     "الترجمات احذفها"): no translation tab, no alquran.cloud
+///     fetch, no replacement translation.
 ///   - علوم السورة: أسماء السورة | نزول السورة | مقاصد السورة |
 ///     فضائل السورة | عدد آيات السورة | إحصائيات
 ///   OMITTED (no verified source — never fabricated): القراءات،
 ///   التصريف، التجويد، الفوائد، and the توقيفية/اجتهادية labels on
 ///   surah names. Names / maqsad / fadail exist only for Fatiha (1)
 ///   and Baqarah (2) so far — other surahs say so plainly.
-/// * bottom row: expand, mute, prev/next word, share, close.
-/// * bottom green action bar: استماع (plays the single word),
-///   الإعدادات, فاصل (page bookmark), تعليق (opens the ayah sheet
-///   for notes).
+/// * المعنى fallback: when the word has no غريب القرآن entry, the
+///   morphology description (morphForWord — same data as الإعراب)
+///   is shown as the body text instead of a "no meaning" note.
+/// * bottom row: expand, mute, prev/next word, counter, share, close.
+/// * bottom green action bar: استماع (plays the single word and
+///   closes the popup so the compact mini-player bar docked at the
+///   bottom of the reader is visible — it NEVER opens the full
+///   player sheet), الإعدادات, فاصل (page bookmark), تعليق (opens
+///   the ayah sheet for notes).
 ///
 /// The tapped word comes from the QCF glyph→word map
 /// ([buildQcfWordMap]), so the index is the TRUE Uthmani word index
@@ -95,7 +110,7 @@ class _WordPopupState extends State<WordPopup> {
   static const _contentTabs = <List<String>>[
     ['المعنى', 'الإعراب'],
     ['التفسير الميسر'],
-    ['أسباب النزول', 'الترجمات'],
+    ['أسباب النزول'],
     [
       'أسماء السورة',
       'نزول السورة',
@@ -126,9 +141,6 @@ class _WordPopupState extends State<WordPopup> {
   SurahScience? _surahScience;
   SurahStats? _stats;
   bool _wordLoading = true;
-  // Translation: null = not requested yet, '' = failed/offline.
-  String? _translation;
-  bool _translationLoading = false;
 
   @override
   void initState() {
@@ -191,20 +203,6 @@ class _WordPopupState extends State<WordPopup> {
     });
   }
 
-  Future<void> _loadTranslation() async {
-    if (_translation != null || _translationLoading) return;
-    setState(() => _translationLoading = true);
-    final text = await SurahSciences.fetchTranslation(
-      widget.surah,
-      widget.verse,
-    );
-    if (!mounted) return;
-    setState(() {
-      _translation = text ?? '';
-      _translationLoading = false;
-    });
-  }
-
   void _setScope(int scope) {
     setState(() {
       _scope = scope;
@@ -214,7 +212,6 @@ class _WordPopupState extends State<WordPopup> {
 
   void _setContentTab(int tab) {
     setState(() => _contentTab = tab);
-    if (_scope == 2 && tab == 1) _loadTranslation();
   }
 
   void _moveWord(int delta) {
@@ -226,9 +223,9 @@ class _WordPopupState extends State<WordPopup> {
 
   Future<void> _share() async {
     final surahName = quran.getSurahName(widget.surah);
-    final meaningPart = _meaning == null
+    final meaningPart = (_meaning ?? _morph) == null
         ? ''
-        : '\nمعناها: $_meaning';
+        : '\nمعناها: ${_meaning ?? _morph}';
     await Share.share(
       '﴿${_word.text}﴾ — سورة $surahName، الآية ${widget.verse}$meaningPart\n'
       'تطبيق نور قرآن',
@@ -238,23 +235,28 @@ class _WordPopupState extends State<WordPopup> {
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
-    final width = size.width * 0.94 > 540 ? 540.0 : size.width * 0.94;
-    final height = size.height * (_expanded ? 0.88 : 0.68);
     final surahName = quran.getSurahName(widget.surah);
+    // Compact card: sizes to its content, capped so it never fills
+    // the screen like the old 68%-tall dialog. The content area is a
+    // Flexible scroll region, so short content (word + meaning) stays
+    // a small card and long content (tafsir, sciences) scrolls inside.
     return Dialog(
-      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 24),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       backgroundColor: Colors.white,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      child: SizedBox(
-        width: width,
-        height: height,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 400,
+          maxHeight: size.height * (_expanded ? 0.85 : 0.60),
+        ),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             _scopeTabs(),
             const Divider(height: 1),
             _contentTabsRow(),
             const Divider(height: 1),
-            Expanded(child: _content(surahName)),
+            Flexible(child: _content(surahName)),
             const Divider(height: 1),
             _controlRow(),
             _actionBar(),
@@ -264,27 +266,39 @@ class _WordPopupState extends State<WordPopup> {
     );
   }
 
+  /// Scope tabs as equal-width segments — no horizontal scrolling,
+  /// so nothing (not even علوم السورة) is cut off at a 411dp width.
   Widget _scopeTabs() {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
+    return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
       child: Row(
         children: [
           for (var i = 0; i < _scopes.length; i++)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 3),
-              child: ChoiceChip(
-                label: Text(_scopes[i]),
-                selected: _scope == i,
-                onSelected: (_) => _setScope(i),
-                selectedColor: _accent,
-                labelStyle: TextStyle(
-                  color: _scope == i ? Colors.white : Colors.black87,
-                  fontWeight:
-                      _scope == i ? FontWeight.bold : FontWeight.normal,
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 2),
+                child: ChoiceChip(
+                  label: Text(
+                    _scopes[i],
+                    maxLines: 1,
+                    overflow: TextOverflow.visible,
+                  ),
+                  labelPadding:
+                      const EdgeInsets.symmetric(horizontal: 4),
+                  visualDensity: VisualDensity.compact,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  selected: _scope == i,
+                  onSelected: (_) => _setScope(i),
+                  selectedColor: _accent,
+                  labelStyle: TextStyle(
+                    fontSize: 12,
+                    color: _scope == i ? Colors.white : Colors.black87,
+                    fontWeight:
+                        _scope == i ? FontWeight.bold : FontWeight.normal,
+                  ),
+                  backgroundColor: Colors.grey.shade200,
+                  side: BorderSide.none,
                 ),
-                backgroundColor: Colors.grey.shade200,
-                side: BorderSide.none,
               ),
             ),
         ],
@@ -292,6 +306,8 @@ class _WordPopupState extends State<WordPopup> {
     );
   }
 
+  /// Content tabs WRAP onto extra lines instead of scrolling
+  /// horizontally — the 6 علوم السورة tabs must all be visible.
   Widget _contentTabsRow() {
     final tabs = _contentTabs[_scope];
     if (tabs.length == 1) {
@@ -307,26 +323,27 @@ class _WordPopupState extends State<WordPopup> {
         ),
       );
     }
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
+    return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      child: Row(
+      child: Wrap(
+        alignment: WrapAlignment.center,
+        spacing: 6,
+        runSpacing: 6,
         children: [
           for (var i = 0; i < tabs.length; i++)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 3),
-              child: ChoiceChip(
-                label: Text(tabs[i], style: const TextStyle(fontSize: 13)),
-                selected: _contentTab == i,
-                onSelected: (_) => _setContentTab(i),
-                selectedColor: _gold,
-                labelStyle: TextStyle(
-                  color:
-                      _contentTab == i ? Colors.white : Colors.black87,
-                ),
-                backgroundColor: Colors.grey.shade200,
-                side: BorderSide.none,
+            ChoiceChip(
+              label: Text(tabs[i], style: const TextStyle(fontSize: 13)),
+              labelPadding: const EdgeInsets.symmetric(horizontal: 6),
+              visualDensity: VisualDensity.compact,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              selected: _contentTab == i,
+              onSelected: (_) => _setContentTab(i),
+              selectedColor: _gold,
+              labelStyle: TextStyle(
+                color: _contentTab == i ? Colors.white : Colors.black87,
               ),
+              backgroundColor: Colors.grey.shade200,
+              side: BorderSide.none,
             ),
         ],
       ),
@@ -373,18 +390,22 @@ class _WordPopupState extends State<WordPopup> {
         ),
       );
     }
-    // المعنى.
+    // المعنى — word in green, meaning directly below it (reference
+    // layout). No full-ayah box: the card stays small, and the ayah
+    // is one tap away on the الآية scope. When the word has no
+    // غريب القرآن entry, the morphology description is the body
+    // text instead of a "no special meaning" note.
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _ayahBox(),
-          const SizedBox(height: 14),
           _bigWord(),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           if (_meaning != null)
             _bodyText(_meaning!)
+          else if (_morph != null)
+            _bodyText(_morph!)
           else
             _noteText(
               'هذه الكلمة ليس لها معنى خاص في غريب القرآن — معناها واضح '
@@ -395,34 +416,13 @@ class _WordPopupState extends State<WordPopup> {
     );
   }
 
-  Widget _ayahBox() {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFAF8F5),
-        border: Border.all(color: _gold.withValues(alpha: 0.5)),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Text(
-        _ayahText,
-        textAlign: TextAlign.center,
-        style: const TextStyle(
-          fontFamily: 'Hafs',
-          fontSize: 20,
-          height: 1.9,
-          color: Colors.black87,
-        ),
-      ),
-    );
-  }
-
   Widget _bigWord() {
     return Text(
       _word.text,
       textAlign: TextAlign.center,
       style: const TextStyle(
         fontFamily: 'Hafs',
-        fontSize: 38,
+        fontSize: 32,
         fontWeight: FontWeight.bold,
         color: _accent,
         height: 1.4,
@@ -477,45 +477,8 @@ class _WordPopupState extends State<WordPopup> {
     );
   }
 
-  // -- الصفحة -----------------------------------------------------------
-
+  // -- الصفحة: أسباب النزول only (الترجمات removed, v11 Bug I). -----
   Widget _pageContent() {
-    if (_contentTab == 1) {
-      // الترجمات.
-      return SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text(
-              'الترجمة الإنجليزية — Saheeh International',
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 14,
-                color: _accent,
-              ),
-            ),
-            const SizedBox(height: 8),
-            if (_translationLoading)
-              const Center(child: CircularProgressIndicator())
-            else if (_translation != null && _translation!.isNotEmpty)
-              Text(
-                _translation!,
-                textDirection: TextDirection.ltr,
-                style: const TextStyle(fontSize: 15, height: 1.6),
-              )
-            else
-              _noteText(
-                'تعذّر تحميل الترجمة — تحتاج إلى اتصال بالإنترنت. '
-                'المصدر: alquran.cloud (Saheeh International).',
-              ),
-            const SizedBox(height: 8),
-            _noteText('المصدر: alquran.cloud — Saheeh International.'),
-          ],
-        ),
-      );
-    }
-    // أسباب النزول.
     final asbab = _asbab;
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -838,55 +801,89 @@ class _WordPopupState extends State<WordPopup> {
   // -- bottom rows ------------------------------------------------------
 
   Widget _controlRow() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
-          IconButton(
-            tooltip: _expanded ? 'تصغير' : 'تكبير',
-            icon: Icon(
-              _expanded ? Icons.fullscreen_exit : Icons.fullscreen,
+    // Custom 32dp tap targets, NOT IconButton: IconButton enforces
+    // a 48dp minimum tap target, so 6 buttons + the counter needed
+    // ~460dp and the row overflowed the 363dp inner width. At 32dp
+    // the row needs ~350dp even in the wide test font, ~295dp in
+    // a real Arabic font.
+    Widget controlIcon({
+      required IconData icon,
+      required String tooltip,
+      required VoidCallback? onPressed,
+    }) {
+      return Tooltip(
+        message: tooltip,
+        child: SizedBox(
+          width: 32,
+          height: 32,
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(16),
+              onTap: onPressed,
+              child: Icon(
+                icon,
+                size: 20,
+                color: onPressed == null ? Colors.black26 : Colors.black87,
+              ),
             ),
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          controlIcon(
+            icon: _expanded ? Icons.fullscreen_exit : Icons.fullscreen,
+            tooltip: _expanded ? 'تصغير' : 'تكبير',
             onPressed: () => setState(() => _expanded = !_expanded),
           ),
           ListenableBuilder(
             listenable: widget.audioController,
-            builder: (context, _) => IconButton(
-              tooltip: widget.audioController.isMuted ? 'إلغاء الكتم' : 'كتم',
-              icon: Icon(
-                widget.audioController.isMuted
-                    ? Icons.volume_off
-                    : Icons.volume_up,
-              ),
+            builder: (context, _) => controlIcon(
+              icon: widget.audioController.isMuted
+                  ? Icons.volume_off
+                  : Icons.volume_up,
+              tooltip:
+                  widget.audioController.isMuted ? 'إلغاء الكتم' : 'كتم',
               onPressed: () => widget.audioController.toggleMute(),
             ),
           ),
-          IconButton(
+          controlIcon(
+            icon: Icons.chevron_right,
             tooltip: 'الكلمة السابقة',
-            icon: const Icon(Icons.chevron_right),
             onPressed:
                 _wordIndex > 0 ? () => _moveWord(-1) : null,
           ),
-          Text(
-            '${_wordIndex + 1} / $_mapWordCount',
-            style: const TextStyle(fontSize: 13, color: Colors.black54),
+          // Unambiguous counter: "الكلمة 4 من 46". The old
+          // "4 / 46" rendered as "46 / 4" — the bidi algorithm
+          // flips a bare "n / m" inside an RTL paragraph.
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 2),
+            child: Text(
+              'الكلمة ${_wordIndex + 1} من $_mapWordCount',
+              style: const TextStyle(fontSize: 11, color: Colors.black54),
+            ),
           ),
-          IconButton(
+          controlIcon(
+            icon: Icons.chevron_left,
             tooltip: 'الكلمة التالية',
-            icon: const Icon(Icons.chevron_left),
             onPressed: _wordIndex < _mapWordCount - 1
                 ? () => _moveWord(1)
                 : null,
           ),
-          IconButton(
+          controlIcon(
+            icon: Icons.share,
             tooltip: 'مشاركة',
-            icon: const Icon(Icons.share),
             onPressed: _share,
           ),
-          IconButton(
+          controlIcon(
+            icon: Icons.close,
             tooltip: 'إغلاق',
-            icon: const Icon(Icons.close),
             onPressed: () => Navigator.of(context).pop(),
           ),
         ],
@@ -902,31 +899,44 @@ class _WordPopupState extends State<WordPopup> {
       ),
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
-          _actionButton(
-            Icons.play_arrow,
-            'استماع',
-            () => widget.onPlayWord(_wordIndex),
+          Expanded(
+            child: _actionButton(
+              Icons.play_arrow,
+              'استماع',
+              () {
+                widget.onPlayWord(_wordIndex);
+                // Close the popup so the compact mini-player bar
+                // docked at the bottom of the reader is visible.
+                // (A Dialog is modal — the bar sits behind it.)
+                if (mounted) Navigator.of(context).pop();
+              },
+            ),
           ),
-          _actionButton(
-            Icons.settings,
-            'الإعدادات',
-            widget.onOpenSettings,
+          Expanded(
+            child: _actionButton(
+              Icons.settings,
+              'الإعدادات',
+              widget.onOpenSettings,
+            ),
           ),
-          _actionButton(
-            Icons.bookmark,
-            'فاصل',
-            widget.onToggleBookmark,
-            active: widget.isBookmarked,
+          Expanded(
+            child: _actionButton(
+              Icons.bookmark,
+              'فاصل',
+              widget.onToggleBookmark,
+              active: widget.isBookmarked,
+            ),
           ),
-          _actionButton(
-            Icons.comment,
-            'تعليق',
-            () {
-              Navigator.of(context).pop();
-              widget.onOpenNotes();
-            },
+          Expanded(
+            child: _actionButton(
+              Icons.comment,
+              'تعليق',
+              () {
+                Navigator.of(context).pop();
+                widget.onOpenNotes();
+              },
+            ),
           ),
         ],
       ),
@@ -939,18 +949,25 @@ class _WordPopupState extends State<WordPopup> {
     VoidCallback onPressed, {
     bool active = false,
   }) {
+    // Tight padding + small label: the old default TextButton.icon
+    // padding overflowed the ~387dp inner width and cut استماع off.
     return TextButton.icon(
       onPressed: onPressed,
+      style: TextButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
       icon: Icon(
         icon,
         color: active ? _gold : Colors.white,
-        size: 20,
+        size: 18,
       ),
       label: Text(
         label,
+        maxLines: 1,
         style: TextStyle(
           color: active ? _gold : Colors.white,
-          fontSize: 13,
+          fontSize: 12,
         ),
       ),
     );

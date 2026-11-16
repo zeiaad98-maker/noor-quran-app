@@ -62,6 +62,20 @@ class AudioPlayerSheet extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 _topRow(context),
+                // Loading label under the play button: while the word
+                // / ayah file buffers, the play button keeps its
+                // green background with the white spinner inside
+                // (see _topRow — onPressed is NEVER null, so the
+                // button never renders as a grey disabled circle).
+                if (controller.isLoading)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 6),
+                    child: Text(
+                      'جارٍ التحميل…',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 13, color: Colors.grey),
+                    ),
+                  ),
                 const SizedBox(height: 8),
                 if (ayah != null) _currentLabelWidget(controller, surah!, verse!),
                 if (controller.scope == PlayerScope.word &&
@@ -200,8 +214,14 @@ class AudioPlayerSheet extends StatelessWidget {
           size: 56,
           iconSize: 32,
           tooltip: controller.isPlaying ? 'إيقاف مؤقت' : 'تشغيل',
+          // NEVER null while loading: a null onPressed makes
+          // ElevatedButton render DISABLED (grey background) and
+          // the 24px white spinner inside looks like a tiny white
+          // square in a still frame — the v10 "grey circle" bug.
+          // While loading the tap is a harmless no-op (tapping
+          // togglePlayPause mid-load would race the in-flight load).
           onPressed: controller.isLoading
-              ? null
+              ? () {}
               : controller.togglePlayPause,
           child: controller.isLoading
               ? const SizedBox(
