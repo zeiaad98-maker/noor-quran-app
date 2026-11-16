@@ -6,6 +6,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
+import '../data/syria_mosques.dart';
+
 class NearbyMosquesScreen extends StatefulWidget {
   final double lat;
   final double lng;
@@ -89,7 +91,26 @@ class _NearbyMosquesScreenState extends State<NearbyMosquesScreen> {
       }
     }
 
-    // Nominatim OpenStreetMap (سريع وموثوق جداً عبر GET).
+    // PRIMARY SOURCE — offline bundled data (ALL mosques of Syria,
+    // assets/quran_data/syria_mosques.json, 2,919 mosques). No network,
+    // works anywhere in Syria. If the asset fails to load, the
+    // Nominatim fallback below still runs, so the screen is never
+    // left empty because of a bad asset.
+    try {
+      final offline = await SyriaMosques.ensureLoaded();
+      for (final m in SyriaMosques.nearestWithin(
+          offline, widget.lat, widget.lng)) {
+        addMosque(
+          m['name'] as String,
+          m['lat'] as double,
+          m['lng'] as double,
+        );
+      }
+    } catch (_) {}
+
+    // FALLBACK — Nominatim live search. Only adds mosques the bundled
+    // data does not have (e.g. newly mapped ones, or places outside
+    // the bundled extract); duplicates are dropped by addMosque.
     //
     // WHY Arabic queries: the old `q=mosque` (English) is a free-text
     // name search — Syrian mosques are tagged with Arabic names, so it

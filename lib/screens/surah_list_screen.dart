@@ -91,20 +91,29 @@ class _SurahListScreenState extends State<SurahListScreen> {
 
               return ListTile(
                 leading: CircleAvatar(
+                  radius: 24,
                   backgroundColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
                   child: Text(
                     '$surahNum',
                     style: TextStyle(
                       color: Theme.of(context).colorScheme.primary,
                       fontWeight: FontWeight.bold,
+                      fontSize: 18,
                     ),
                   ),
                 ),
+                // The name is the priority ("كبرهم اد ما بتقدر"): the
+                // calligraphy sits on its own line above the info
+                // line, cropped of its transparent padding and as
+                // tall as the row allows (108dp image → ~78dp
+                // widget, ink up to ~69dp). The number circle,
+                // info line and chevron all stay visible.
                 title: Align(
-                  alignment: Alignment.centerRight,
+                  alignment: Alignment.center,
                   child: SurahNameImage(
                     surahNumber: surahNum,
-                    height: 30,
+                    height: 108,
+                    cropPadding: true,
                     isDark: Theme.of(context).brightness == Brightness.dark,
                   ),
                 ),

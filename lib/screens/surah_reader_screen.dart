@@ -14,6 +14,7 @@ import '../data/ayah_notes.dart';
 import '../main.dart';
 import '../widgets/audio_player_sheet.dart';
 import '../widgets/ayah_action_sheet.dart';
+import '../widgets/mini_audio_bar.dart';
 import '../widgets/noor_qcf_page.dart';
 import '../widgets/quran_search_sheet.dart';
 import '../widgets/surah_name_image.dart';
@@ -44,6 +45,11 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
   // True while a page jump was caused by the player following the
   // playing ayah; such jumps must NOT stop the playback.
   bool _playerDrivenPageChange = false;
+  // True while the compact mini-player bar is docked at the bottom
+  // of the reader (word playback from the word popup). It is NOT a
+  // modal sheet: the reader's own audio button still opens the full
+  // AudioPlayerSheet.
+  bool _showMiniBar = false;
   Set<String> _notedAyahIds = {};
   Timer? _clockTimer;
   String _currentTime = '';
@@ -185,6 +191,7 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
       _playerDrivenPageChange = false;
     } else {
       unawaited(_audioController.stop());
+      _showMiniBar = false;
     }
     _saveLastRead();
     SharedPreferences.getInstance().then((prefs) {
@@ -423,6 +430,13 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
   /// (the ayah sheet passes i + 1), so the play callback adds 1.
   /// Tapping the verse-end number glyph still opens the ayah sheet
   /// ([_openAyahSheet]) — that is the way to notes / ayah audio.
+  ///
+  /// v11: استماع in the popup plays the single word DIRECTLY and
+  /// shows the compact mini-player bar docked at the bottom of the
+  /// reader — it does NOT open the full player sheet. (The popup
+  /// itself closes on استماع, so the docked bar is visible: a Dialog
+  /// is modal and the bar sits behind it.) The reader's own audio
+  /// button and the ayah sheet still open the full sheet.
   void _openWordPopup(int surah, int verse, int wordIndex) {
     showWordPopup(
       context: context,
@@ -433,12 +447,10 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
       isBookmarked: _isBookmarked,
       onToggleBookmark: _toggleBookmark,
       onOpenSettings: _showMushafSettingsSheet,
-      onPlayWord: (word) => _openPlayerSheet(
-        scope: PlayerScope.word,
-        surah: surah,
-        verse: verse,
-        wordIndex: word + 1,
-      ),
+      onPlayWord: (word) {
+        unawaited(_audioController.playWord(surah, verse, word + 1));
+        if (mounted) setState(() => _showMiniBar = true);
+      },
       onOpenNotes: () => _openAyahSheet(surah, verse),
     );
   }
@@ -774,6 +786,25 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                   ),
                 ),
               ),
+              // Compact mini-player bar (word playback from the word
+              // popup): docked at the bottom of the reader, overlaying
+              // the page — never a modal sheet. X stops the audio
+              // and hides the bar; a manual page change hides it too.
+              if (_showMiniBar)
+                Positioned(
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  child: MiniAudioBar(
+                    controller: _audioController,
+                    onClose: () async {
+                      await _audioController.stop();
+                      if (mounted) {
+                        setState(() => _showMiniBar = false);
+                      }
+                    },
+                  ),
+                ),
             ],
           ),
         ),
