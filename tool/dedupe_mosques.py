@@ -4,7 +4,8 @@ Dedupe rule: sort named entries first (ways before nodes when both named,
 since a way centroid is usually the building centre), then greedily keep
 an entry unless it is within 50 m of an already-kept entry AND
 (same normalised name OR either entry is unnamed). Two differently-named
-mosques 50 m apart are kept as distinct.
+mosques 50 m apart are kept as distinct. A grid index keeps this fast
+even with several thousand candidates.
 
 Output: assets/quran_data/syria_mosques.json
   {"count": N, "named": M, "unnamed": K, "source": "...", "mosques": [[name, lat, lon], ...]}
@@ -13,9 +14,11 @@ empty name; the app labels them "مسجد".
 """
 import json
 import math
+from collections import Counter
 
 RAW = '/tmp/mosques_raw.json'
-OUT = '/home/hatch/workspace/noor-quran-mosques/assets/quran_data/syria_mosques.json'
+OUT = '/home/hatch/workspace/noor-quran/assets/quran_data/syria_mosques.json'
+
 
 def haversine_m(lat1, lon1, lat2, lon2):
     r = 6371000.0
@@ -25,8 +28,10 @@ def haversine_m(lat1, lon1, lat2, lon2):
     a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
     return 2 * r * math.asin(math.sqrt(a))
 
+
 def norm(name):
     return ' '.join((name or '').split())
+
 
 def is_clearly_not_mosque(name):
     """OSM tagging errors and shrines, not mosques: a church mis-tagged
@@ -37,10 +42,12 @@ def is_clearly_not_mosque(name):
         return True
     return n.startswith(('مقام ', 'مقام', 'ضريح', 'مزار'))
 
+
 with open(RAW, encoding='utf-8') as f:
     cands = json.load(f)
 
 print('raw candidates:', len(cands))
+print('by reason (raw):', Counter(c.get('reason', '?') for c in cands))
 excluded = [c for c in cands if is_clearly_not_mosque(c['name'])]
 print('excluded as clearly-not-mosque:', len(excluded),
       [norm(c['name']) for c in excluded][:30])
@@ -49,28 +56,55 @@ cands = [c for c in cands if not is_clearly_not_mosque(c['name'])]
 # Priority: named first, then ways before nodes, then lower osm id.
 def priority(c):
     named = 0 if norm(c['name']) else 1
-    kind = 0 if c['kind'] == 'way' else 1
+    kind = {'way': 0, 'relation': 1, 'node': 2}.get(c['kind'], 3)
     return (named, kind, c['osm_id'])
 
+
 cands.sort(key=priority)
+
+# Grid index: cell ~0.001 deg (~110 m); 50 m neighbours live in the
+# same or adjacent cells, so only those are compared.
+CELL = 0.001
+grid = {}
+
+
+def cell_key(lat, lon):
+    return (int(lat // CELL), int(lon // CELL))
+
+
+def neighbours(lat, lon):
+    cx, cy = cell_key(lat, lon)
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            yield from grid.get((cx + dx, cy + dy), [])
+
 
 kept = []
 dropped = 0
 for c in cands:
     dup = False
-    for k in kept:
-        if haversine_m(c['lat'], c['lon'], k['lat'], k['lon']) <= 50:
-            if norm(c['name']) == norm(k['name']) or not norm(c['name']) or not norm(k['name']):
-                dup = True
-                break
+    for k in neighbours(c['lat'], c['lon']):
+        d = haversine_m(c['lat'], c['lon'], k['lat'], k['lon'])
+        same_name = norm(c['name']) and norm(c['name']) == norm(k['name'])
+        # Same named mosque mapped twice (node + way) can sit up to
+        # ~100 m apart (e.g. الجامع الأموي: node and way centroid
+        # 57 m apart); unnamed entries stay at 50 m so two distinct
+        # small prayer rooms are not merged.
+        limit = 100 if same_name else 50
+        if d <= limit and (same_name or not norm(c['name']) or not norm(k['name'])):
+            dup = True
+            break
     if dup:
         dropped += 1
     else:
         kept.append(c)
+        grid.setdefault(cell_key(c['lat'], c['lon']), []).append(c)
 
 print('kept:', len(kept), 'dropped as dupes:', dropped)
 named = sum(1 for k in kept if norm(k['name']))
 print('named:', named, 'unnamed:', len(kept) - named)
+print('by reason (kept):', Counter(k.get('reason', '?') for k in kept))
+print('by kind (kept):', Counter(k['kind'] for k in kept))
 
 kept.sort(key=lambda k: (k['lat'], k['lon']))
 mosques = [[norm(k['name']), round(k['lat'], 5), round(k['lon'], 5)] for k in kept]
@@ -78,26 +112,27 @@ data = {
     'count': len(mosques),
     'named': named,
     'unnamed': len(mosques) - named,
-    'source': 'OpenStreetMap Syria extract (Geofabrik syria-261115.osm.pbf, 2026-11-15); amenity=place_of_worship + religion=muslim, plus building=mosque and name-based catches (جامع/مسجد) where religion tag is missing; deduped within 50 m',
+    'source': 'OpenStreetMap Syria extract (Geofabrik syria-latest.osm.pbf, 2026-11-16); maximal extraction: amenity=place_of_worship + religion=muslim, building=mosque, religion=muslim + building/name, and name-based catches (جامع/مسجد/مصلى) where tags are missing; deduped within 50 m',
     'mosques': mosques,
 }
 with open(OUT, 'w', encoding='utf-8') as f:
     json.dump(data, f, ensure_ascii=False, separators=(',', ':'))
 print('wrote', OUT)
 
-# Spot checks
+
 def nearest(lat, lon, n=3):
     scored = sorted(kept, key=lambda k: haversine_m(lat, lon, k['lat'], k['lon']))
     return [(round(haversine_m(lat, lon, k['lat'], k['lon'])), norm(k['name']) or '(unnamed)', k['lat'], k['lon']) for k in scored[:n]]
+
 
 print('SPOT جامع الإيمان (33.4666772,36.1994628):', nearest(33.4666772, 36.1994628))
 print('SPOT Umayyad (~33.5118,36.3068):', nearest(33.5118, 36.3068))
 print('SPOT Muadamiyah centre (33.44,36.186) nearest 5:', nearest(33.44, 36.186, 5))
 print('SPOT Aleppo citadel (36.1992,37.1626) nearest 3:', nearest(36.1992, 37.1626))
 print('SPOT Homs centre (34.7269,36.7235) nearest 3:', nearest(34.7269, 36.7235))
-# جامع عثمان in Muadamiyah? search names near user point
+print('SPOT Daraa centre (32.62,36.10) nearest 5:', nearest(32.62, 36.10, 5))
 near = [k for k in kept if haversine_m(33.44, 36.186, k['lat'], k['lon']) <= 8000]
 print('within 8km of (33.44,36.186):', len(near))
-print('names containing عثمان within 8km:', [ (norm(k['name']), k['lat'], k['lon']) for k in near if 'عثمان' in norm(k['name']) ])
+print('names containing عثمان within 8km:', [(norm(k['name']), k['lat'], k['lon']) for k in near if 'عثمان' in norm(k['name'])])
 print('names containing الزيتونة:', [(norm(k['name']), k['lat'], k['lon']) for k in kept if 'الزيتونة' in norm(k['name'])])
 print('names containing الأموي:', [(norm(k['name']), k['lat'], k['lon']) for k in kept if 'الأموي' in norm(k['name'])])
