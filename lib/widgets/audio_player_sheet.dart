@@ -4,6 +4,7 @@ import 'package:quran/quran.dart' as quran;
 
 import '../data/audio_player_controller.dart';
 import '../data/quran_audio.dart';
+import '../data/word_meanings.dart';
 
 /// Audio player bottom sheet, modelled on the SurahApp player layout
 /// the user approved, in Noor colours (cream 0xFFFAF6EE, gold
@@ -62,16 +63,7 @@ class AudioPlayerSheet extends StatelessWidget {
                 const SizedBox(height: 12),
                 _topRow(context),
                 const SizedBox(height: 8),
-                if (ayah != null)
-                  Text(
-                    _currentLabel(controller, surah!, verse!),
-                    textAlign: TextAlign.center,
-                    style: GoogleFonts.amiri(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: _green,
-                    ),
-                  ),
+                if (ayah != null) _currentLabelWidget(controller, surah!, verse!),
                 if (controller.scope == PlayerScope.word &&
                     controller.wordUsesWbw)
                   Padding(
@@ -107,25 +99,39 @@ class AudioPlayerSheet extends StatelessWidget {
     );
   }
 
-  String _currentLabel(
+  /// Current-item label. For the word scope the word itself is read
+  /// from the Uthmani word list (the same numbering the audio uses),
+  /// so the label always names the word that is actually playing —
+  /// the old simple-text split named a different word (v9 bug).
+  Widget _currentLabelWidget(
       AudioPlayerController c, int surah, int verse) {
     final base =
         'سورة ${quran.getSurahNameArabic(surah)} • الآية $verse';
+    Text label(String text) => Text(
+          text,
+          textAlign: TextAlign.center,
+          style: GoogleFonts.amiri(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: _green,
+          ),
+        );
     if (c.scope == PlayerScope.word && c.wordIndex != null) {
-      final words = quran
-          .getVerse(surah, verse)
-          .split(' ')
-          .where((w) => w.isNotEmpty)
-          .toList();
-      final word = c.wordIndex! - 1 < words.length
-          ? words[c.wordIndex! - 1]
-          : '';
-      return '$base • الكلمة: $word';
+      return FutureBuilder<List<String>>(
+        future: QuranWordData.wordsForAyah(surah, verse),
+        builder: (context, snap) {
+          final words = snap.data;
+          final word = (words != null && c.wordIndex! - 1 < words.length)
+              ? words[c.wordIndex! - 1]
+              : '';
+          return label('$base • الكلمة: $word');
+        },
+      );
     }
     if (c.scope == PlayerScope.surah) {
-      return '$base • من ${quran.getVerseCount(surah)} آية';
+      return label('$base • من ${quran.getVerseCount(surah)} آية');
     }
-    return base;
+    return label(base);
   }
 
   Widget _topRow(BuildContext context) {

@@ -2,6 +2,39 @@ import 'package:flutter/gestures.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:qcf_quran/qcf_quran.dart';
 
+/// Worst-case natural height of a 15-line Mushaf page at `h = 1.0`,
+/// for a screen whose calibrated font scale is [sp].
+///
+/// The largest per-page base font among 15-line pages is 23.7
+/// (pages 51 and 501 — see qcf_quran's `page_font_size.dart`); one
+/// verse line is `base × sp × verseHeight` tall, so 15 lines are
+/// `15 × 23.7 × verseHeight × sp`. The extra 12dp covers the lines
+/// that run taller than a plain verse line (surah headers and
+/// basmalas on multi-surah pages): measured over all 604 pages, the
+/// tallest real paragraph is 792dp at 411dp width and 825dp at
+/// 432dp; this formula gives 793.4 / 833.4 there. Pages 1–2 are
+/// shorter (8 lines) and never bind.
+///
+/// Verified by `test/mushaf_vertical_fit_test.dart`, which measures
+/// every page's real paragraph height at the computed `h` and asserts
+/// it fits the available height at 411×919, 432×965 and 390×844.
+double mushafMaxNaturalHeight(double sp, {double verseHeight = 2.1}) =>
+    15 * 23.7 * verseHeight * sp + 12;
+
+/// Line-height factor that fits the tallest Mushaf page into
+/// [availableHeight] without changing the font size — so the Madinah
+/// horizontal line breaks are untouched, only the line spacing
+/// shrinks. Never above 1.0: a page shorter than the available
+/// height simply keeps the calibrated spacing.
+double mushafHeightFactor(
+  double availableHeight,
+  double sp, {
+  double verseHeight = 2.1,
+}) {
+  final natural = mushafMaxNaturalHeight(sp, verseHeight: verseHeight);
+  return (availableHeight / natural).clamp(0.0, 1.0);
+}
+
 /// Local copy of qcf_quran 0.0.5's [QcfPage] with ONE fix.
 ///
 /// **The bug in the package:** [QcfPage] renders each verse with
@@ -223,57 +256,78 @@ class NoorQcfPage extends StatelessWidget {
       }
     }
 
-    return Stack(
-      children: [
-        Scrollbar(
-          child: SingleChildScrollView(
-            child: SizedBox(
-              height: screenSize.height,
-              width: screenSize.width,
-              child: ListView(
-                shrinkWrap: true,
-                children: [
-                  SizedBox(
-                    width: double.infinity,
-                    child: Padding(
-                      padding: EdgeInsets.zero,
-                      child: Text.rich(
-                        TextSpan(children: verseSpans),
-                        locale: const Locale("ar"),
-                        textAlign: TextAlign.center,
-                        textDirection: TextDirection.rtl,
-                        style: TextStyle(
-                          fontFamily: pageFont,
-                          package: 'qcf_quran',
-                          fontSize:
-                              isPortrait
-                                  ? baseFontSize
-                                  : (pageNumber == 1 || pageNumber == 2)
-                                  ? 20 * sp
-                                  : baseFontSize - (17 * sp),
-                          color: theme.verseTextColor,
-                          height:
-                              isPortrait
-                                  ? (pageNumber == 1 || pageNumber == 2)
-                                      ? 2.2 * h
-                                      : theme.verseHeight * h
-                                  : (pageNumber == 1 || pageNumber == 2)
-                                  ? 4 *
-                                      h // simplified based on user's manual edit evaluation
-                                  : 4 *
-                                      h, // simplified based on user's manual edit evaluation
-                          letterSpacing: theme.letterSpacing,
-                          wordSpacing: theme.wordSpacing,
+    // Vertical fit (v9 — page 5 clipped on the phone):
+    // 1) The scrollables get EXPLICIT zero padding. A null padding
+    //    makes BoxScrollView consume the MediaQuery system padding,
+    //    and the reader's no-scaling MediaQuery wrapper carries the
+    //    FULL padding (status bar 24dp + nav bar) because its context
+    //    sits above the SafeArea — so the whole page was pushed down
+    //    24dp inside the viewport and the last lines clipped.
+    // 2) The SizedBox is the AVAILABLE height (the PageView viewport
+    //    from LayoutBuilder), not the full screen height — a taller
+    //    box left a phantom scroll area (maxScrollExtent 133dp) and
+    //    the page could scroll, hiding lines below the fold.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final viewportHeight =
+            constraints.maxHeight.isFinite
+                ? constraints.maxHeight
+                : screenSize.height;
+        return Stack(
+          children: [
+            Scrollbar(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.zero,
+                child: SizedBox(
+                  height: viewportHeight,
+                  width: screenSize.width,
+                  child: ListView(
+                    padding: EdgeInsets.zero,
+                    shrinkWrap: true,
+                    children: [
+                      SizedBox(
+                        width: double.infinity,
+                        child: Padding(
+                          padding: EdgeInsets.zero,
+                          child: Text.rich(
+                            TextSpan(children: verseSpans),
+                            locale: const Locale("ar"),
+                            textAlign: TextAlign.center,
+                            textDirection: TextDirection.rtl,
+                            style: TextStyle(
+                              fontFamily: pageFont,
+                              package: 'qcf_quran',
+                              fontSize:
+                                  isPortrait
+                                      ? baseFontSize
+                                      : (pageNumber == 1 || pageNumber == 2)
+                                      ? 20 * sp
+                                      : baseFontSize - (17 * sp),
+                              color: theme.verseTextColor,
+                              height:
+                                  isPortrait
+                                      ? (pageNumber == 1 || pageNumber == 2)
+                                          ? 2.2 * h
+                                          : theme.verseHeight * h
+                                      : (pageNumber == 1 || pageNumber == 2)
+                                      ? 4 *
+                                          h // simplified based on user's manual edit evaluation
+                                      : 4 *
+                                          h, // simplified based on user's manual edit evaluation
+                              letterSpacing: theme.letterSpacing,
+                              wordSpacing: theme.wordSpacing,
+                            ),
+                          ),
                         ),
                       ),
-                    ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
-          ),
-        ),
-      ],
+          ],
+        );
+      },
     );
   }
 }

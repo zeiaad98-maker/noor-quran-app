@@ -40,11 +40,20 @@ class AyahActionSheet extends StatefulWidget {
 class _AyahActionSheetState extends State<AyahActionSheet> {
   String? _note;
   String? _quarterLabel;
+  /// Uthmani words of this ayah, in audio-segment order (see
+  /// QuranWordData.wordsForAyah). Null while loading: the chips stay
+  /// hidden until it arrives, so a tap can never pass a wrong
+  /// (simple-text) index to the player.
+  List<String>? _words;
 
   @override
   void initState() {
     super.initState();
     _loadNote();
+    QuranWordData.wordsForAyah(widget.surahNumber, widget.verseNumber)
+        .then((w) {
+      if (mounted) setState(() => _words = w);
+    });
     QuranWordData.hizbQuarterLabel(widget.surahNumber, widget.verseNumber)
         .then((label) {
       if (mounted) setState(() => _quarterLabel = label);
@@ -154,7 +163,6 @@ class _AyahActionSheetState extends State<AyahActionSheet> {
         quran.getJuzNumber(widget.surahNumber, widget.verseNumber);
     final verseText =
         quran.getVerse(widget.surahNumber, widget.verseNumber);
-    final words = verseText.split(' ').where((w) => w.isNotEmpty).toList();
 
     return Container(
       decoration: BoxDecoration(
@@ -217,26 +225,38 @@ class _AyahActionSheetState extends State<AyahActionSheet> {
               style: GoogleFonts.amiri(fontSize: 14, color: Colors.grey),
             ),
             const SizedBox(height: 6),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                for (var i = 0; i < words.length; i++)
-                  OutlinedButton(
-                    onPressed: () => _openWord(words[i], i + 1),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 4),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    child: Text(
-                      words[i],
-                      style: GoogleFonts.amiri(fontSize: 17),
-                    ),
+            if (_words == null)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(strokeWidth: 2.5),
                   ),
-              ],
-            ),
+                ),
+              )
+            else
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (var i = 0; i < _words!.length; i++)
+                    OutlinedButton(
+                      onPressed: () => _openWord(_words![i], i + 1),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: Text(
+                        _words![i],
+                        style: GoogleFonts.amiri(fontSize: 17),
+                      ),
+                    ),
+                ],
+              ),
             const SizedBox(height: 16),
             const Divider(),
             FilledButton.icon(
