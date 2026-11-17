@@ -141,6 +141,22 @@ String ayahFileName(int surah, int ayah) =>
 String everyayahUrl(Reciter reciter, int surah, int ayah) =>
     'https://everyayah.com/data/${reciter.everyayah}/${ayahFileName(surah, ayah)}.mp3';
 
+/// Per-surah ZIP of [reciter] from everyayah.com (v13.5) — Wahy's
+/// exact method: Wahy downloads these ZIPs, which is why its ayah
+/// audio works on the user's phone while our bare-HTTPS per-ayah
+/// URL above does not open from his Syrian network. The address is
+/// the plain-HTTP www one Wahy's API redirects to; it 301-redirects
+/// to `https://www.everyayah.com/...` (verified live 2026-11-17:
+/// Tunaiji 001.zip = 200, 379,310 B, a real ZIP with
+/// 001001.mp3–001007.mp3 + 000_license.html; the 001001.mp3 inside
+/// is 64 kbps / 5.67 s — Wahy's exact audio, same reciter folder,
+/// a different take/bitrate than the per-ayah file). The ZIP is
+/// downloaded once per surah and unzipped into the ayah cache dir,
+/// so a surah once downloaded plays fully offline.
+String everyayahSurahZipUrl(Reciter reciter, int surah) =>
+    'http://www.everyayah.com/data/${reciter.everyayah}/zips/'
+    '${surah.toString().padLeft(3, '0')}.zip';
+
 /// Full-surah mp3 of [reciter] from mp3quran.net (fallback only —
 /// the player normally plays the surah as a sequence of ayah files).
 String mp3quranSurahUrl(Reciter reciter, int surah) =>
@@ -167,7 +183,8 @@ String? quranComAyahUrl(Reciter reciter, int surah, int ayah) {
 /// 2026-11-17: 3:7 word 15 الَّذِينَ is file 015, the API claims
 /// 016, and 016 speaks فِي). Primary host is Quran.com's current
 /// CDN (audio.qurancdn.com, per api-docs); [wbwWordUrlLegacy] is
-/// the old host, tried only if the new one fails.
+/// the old host and [wbwWordUrlSurahPedia] the SurahPedia host,
+/// tried only if the earlier ones fail.
 String wbwWordUrl(int surah, int ayah, int fileNumber) =>
     'https://audio.qurancdn.com/wbw/'
     '${surah.toString().padLeft(3, '0')}_'
@@ -180,6 +197,26 @@ String wbwWordUrlLegacy(int surah, int ayah, int fileNumber) =>
     'https://verses.quran.com/wbw/'
     '${surah.toString().padLeft(3, '0')}_'
     '${ayah.toString().padLeft(3, '0')}_'
+    '${fileNumber.toString().padLeft(3, '0')}.mp3';
+
+/// SurahPedia host for the wbw recording
+/// (resources.surahpedia.com) — third attempt, after the Quran.com
+/// CDN and the legacy host (v13.5). A different host, so it can
+/// work when the Quran.com hosts are unreachable from the user's
+/// network (the user's 'no internet' on a strong connection).
+/// Verified 2026-11-17 by decompiling Wahy 1.4.9: Wahy's
+/// soundOfWord_v2 endpoint 302-redirects to these files, which are
+/// BYTE-IDENTICAL to the Quran.com wbw files (MD5-verified — e.g.
+/// 003007015 = 16c7e66e1d61d479b544133af3bf0bb2 on both hosts).
+/// Note the pattern: slash-separated
+/// Word_by-Word/{surah}/{SSSAAAWWW}.mp3, no underscores — the
+/// surah folder is unpadded, the file name is the three 3-digit
+/// parts concatenated.
+String wbwWordUrlSurahPedia(int surah, int ayah, int fileNumber) =>
+    'https://resources.surahpedia.com/Word_by-Word/'
+    '${surah.toString()}/'
+    '${surah.toString().padLeft(3, '0')}'
+    '${ayah.toString().padLeft(3, '0')}'
     '${fileNumber.toString().padLeft(3, '0')}.mp3';
 
 /// v13.4 — the wbw shift table is DELETED, on purpose. It encoded
