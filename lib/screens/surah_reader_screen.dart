@@ -12,6 +12,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../data/audio_downloads.dart';
 import '../data/audio_player_controller.dart';
 import '../data/ayah_notes.dart';
+import '../data/quran_audio.dart';
 import '../data/tafsir_downloads.dart';
 import '../main.dart';
 import '../widgets/audio_player_sheet.dart';
@@ -41,9 +42,10 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
   bool _showControls = false;
   bool _isBookmarked = false;
   // Mushaf zoom: 1.0 = the size the QCF fonts are calibrated for.
-  // Anything far from 1.0 breaks the Madinah line breaks, so the range
-  // is deliberately narrow (0.92..1.08). See _qcfSp below.
-  double _pageZoom = 1.0;
+  // Anything above it breaks the Madinah line breaks, so the range
+  // is deliberately narrow (0.92..0.98 — see clampMushafZoom).
+  // Default 0.98: the safe maximum, visually identical to 1.0.
+  double _pageZoom = 0.98;
   late final AudioPlayerController _audioController;
   // Offline reciter downloads (v12): one instance shared by the
   // player (plays local files when present) and the reciters screen.
@@ -169,14 +171,28 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
+    // v13 layout fix: the Mushaf fonts are calibrated for zoom 1.00
+    // and wrap above it — clamp any saved zoom (the old range went
+    // to 1.08; the user's was ~1.04) into 0.92–0.98 and persist the
+    // migration, so the layout can never break again.
+    final storedZoom = prefs.getDouble('mushaf_page_zoom') ?? 1.0;
+    final zoom = clampMushafZoom(storedZoom);
+    if (zoom != storedZoom) {
+      await prefs.setDouble('mushaf_page_zoom', zoom);
+    }
+    // v13 default reciter: خليفة الطنيجي. A stored value the user
+    // chose himself is kept; absent or still the old default (0)
+    // migrates to الطنيجي and the migration is persisted.
+    final storedReciter = prefs.getInt('reciter_index');
+    final reciterIndex = resolveDefaultReciterIndex(storedReciter);
+    if (storedReciter != reciterIndex) {
+      await prefs.setInt('reciter_index', reciterIndex);
+    }
+    if (!mounted) return;
     setState(() {
       _isBookmarked = prefs.getInt('bookmarked_page') == _currentPage;
-      // Migrate old zoom values (previously 1.12 default, up to 1.28)
-      // into the narrow range that keeps the Mushaf line breaks intact.
-      _pageZoom =
-          (prefs.getDouble('mushaf_page_zoom') ?? 1.0).clamp(0.92, 1.08);
-      _audioController.setInitialReciterIndex(
-          prefs.getInt('reciter_index') ?? 0);
+      _pageZoom = zoom;
+      _audioController.setInitialReciterIndex(reciterIndex);
     });
   }
 
@@ -342,8 +358,11 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                         icon: const Icon(Icons.add_circle_outline),
                         onPressed: () {
                           setState(() {
-                            _pageZoom = (_pageZoom + 0.04) > 1.08
-                                ? 1.08
+                            // v13: the zoom caps at 0.98 — above the
+                            // calibrated size the Mushaf lines wrap
+                            // (see clampMushafZoom in noor_qcf_page).
+                            _pageZoom = (_pageZoom + 0.04) > 0.98
+                                ? 0.98
                                 : _pageZoom + 0.04;
                           });
                           _saveZoom();
@@ -392,8 +411,7 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
       case PlayerScope.ayah:
         unawaited(_audioController.playAyah(surah!, verse!));
       case PlayerScope.page:
-        unawaited(
-            _audioController.playPages(_currentPage, _currentPage));
+        unawaited(_audioController.playPages(_currentPage, _currentPage));
       case PlayerScope.surah:
         unawaited(_audioController.playSurah(surah!));
     }
@@ -818,8 +836,7 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                             ),
                           ),
                           TextButton.icon(
-                            onPressed: () =>
-                                unawaited(_audioController.stop()),
+                            onPressed: () => unawaited(_audioController.stop()),
                             icon: const Icon(Icons.stop, size: 18),
                             label: Text(
                               'إيقاف الصوت',
