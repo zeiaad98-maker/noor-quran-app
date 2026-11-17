@@ -643,11 +643,11 @@ class AudioPlayerController extends ChangeNotifier {
 
   /// Plays one word from its dedicated wbw recording (v13.2).
   /// Returns true when the word really plays (cached file, or the
-  /// new CDN, or the legacy host), false when every wbw attempt
-  /// failed — the caller then reports the error. The wbw file has
-  /// no seek and no word end: it plays to its own completion, so
-  /// the `completed` state is its only finish. [wordUsesWbw] is set
-  /// ONLY on success.
+  /// new CDN, or the legacy host, or SurahPedia), false when every
+  /// wbw attempt failed — the caller then reports the error. The
+  /// wbw file has no seek and no word end: it plays to its own
+  /// completion, so the `completed` state is its only finish.
+  /// [wordUsesWbw] is set ONLY on success.
   ///
   /// [qcfWord] is the 1-based QCF position (the reader's tap index);
   /// [audioPositionForQcfWord] translates it to the audio word
@@ -679,7 +679,8 @@ class AudioPlayerController extends ChangeNotifier {
       return true;
     }
     // No cached file (or a corrupt one): stream, new CDN first,
-    // legacy host second.
+    // legacy host second, SurahPedia third (v13.5 — a different
+    // host, for when the Quran.com hosts are unreachable).
     if (await _loadAndPlay(
         wbwWordUrl(ayah.$1, ayah.$2, fileNumber), Duration.zero, token)) {
       wordUsesWbw = true;
@@ -688,6 +689,14 @@ class AudioPlayerController extends ChangeNotifier {
     }
     if (await _loadAndPlay(
         wbwWordUrlLegacy(ayah.$1, ayah.$2, fileNumber),
+        Duration.zero,
+        token)) {
+      wordUsesWbw = true;
+      _finishToken = token;
+      return true;
+    }
+    if (await _loadAndPlay(
+        wbwWordUrlSurahPedia(ayah.$1, ayah.$2, fileNumber),
         Duration.zero,
         token)) {
       wordUsesWbw = true;
