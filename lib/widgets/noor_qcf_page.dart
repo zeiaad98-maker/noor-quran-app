@@ -37,6 +37,28 @@ double mushafHeightFactor(
   return (availableHeight / natural).clamp(0.0, 1.0);
 }
 
+/// Maximum Mushaf zoom (v13 — the layout fix).
+///
+/// The QCF page fonts are calibrated for zoom 1.00: the widest
+/// verse line of the whole Mushaf is ~406.5 dp of the 411.4 dp
+/// available at zoom 1.00 (page 579), and at zoom 1.02 real pages
+/// already wrap (page 453 at 1.02, page 3 at 1.03 — the first word
+/// of the line spills alone onto a centred line and the last verses
+/// clip off). The v12 slider allowed up to 1.08, and the user's
+/// saved zoom was ~1.04 — that is the bug: the layout was correct,
+/// the zoom broke it.
+///
+/// 0.98 is visually identical to 1.00 (2% — imperceptible) but leaves
+/// ≥7 dp of margin on the tightest verse line (404.3 dp of 411.4,
+/// page 579; at 1.00 the tightest is ~406.5 dp, under 5 dp of
+/// margin), absorbing the few-dp wider rendering the device shows
+/// against the test-loaded fonts (the device splits different
+/// near-equal lines than the probe at the same zoom). [clampMushafZoom] keeps any saved or entered zoom
+/// inside 0.92–0.98, so every one of the 604 pages keeps its exact
+/// Madinah 15-line breaks. The full sweep at 0.98 is pinned by
+/// `test/v13_layout_pin_test.dart`.
+double clampMushafZoom(double zoom) => zoom.clamp(0.92, 0.98);
+
 /// Local copy of qcf_quran 0.0.5's [QcfPage] with ONE fix.
 ///
 /// **The bug in the package:** [QcfPage] renders each verse with
@@ -88,8 +110,7 @@ class NoorQcfPage extends StatelessWidget {
     int surahNumber,
     int verseNumber,
     LongPressStartDetails details,
-  )?
-  onLongPressDown;
+  )? onLongPressDown;
 
   /// Callback when a verse is tapped.
   final void Function(int surahNumber, int verseNumber)? onTap;
@@ -104,11 +125,10 @@ class NoorQcfPage extends StatelessWidget {
   /// never conflict. When [onWordTap] is null, word taps fall back
   /// to [onTap] (the old whole-verse behaviour).
   final void Function(int surahNumber, int verseNumber, int wordIndex)?
-  onWordTap;
+      onWordTap;
 
   /// Optional callback to customize verse background color dynamically.
-  final Color? Function(int surahNumber, int verseNumber)?
-  verseBackgroundColor;
+  final Color? Function(int surahNumber, int verseNumber)? verseBackgroundColor;
 
   const NoorQcfPage({
     super.key,
@@ -184,10 +204,9 @@ class NoorQcfPage extends StatelessWidget {
                   style: TextStyle(
                     fontFamily: "QCF_P001",
                     package: 'qcf_quran',
-                    fontSize:
-                        getScreenType(context) == ScreenType.large
-                            ? theme.basmalaFontSizeLarge * sp
-                            : theme.basmalaFontSizeSmall * sp,
+                    fontSize: getScreenType(context) == ScreenType.large
+                        ? theme.basmalaFontSizeLarge * sp
+                        : theme.basmalaFontSizeSmall * sp,
                     color: theme.basmalaColor,
                   ),
                 ),
@@ -222,16 +241,14 @@ class NoorQcfPage extends StatelessWidget {
               ..onTap = () => onWordTap?.call(surah, v, wordIndex);
           }
           if (onTap != null) {
-            return TapGestureRecognizer()
-              ..onTap = () => onTap?.call(surah, v);
+            return TapGestureRecognizer()..onTap = () => onTap?.call(surah, v);
           }
           if (onLongPress != null ||
               onLongPressDown != null ||
               onLongPressUp != null) {
             final r = LongPressGestureRecognizer();
             r.onLongPress = () => onLongPress?.call(surah, v);
-            r.onLongPressStart =
-                (d) => onLongPressDown?.call(surah, v, d);
+            r.onLongPressStart = (d) => onLongPressDown?.call(surah, v, d);
             r.onLongPressUp = () => onLongPressUp?.call(surah, v);
             r.onLongPressEnd = (d) => onLongPressCancel?.call(surah, v);
             return r;
@@ -241,16 +258,14 @@ class NoorQcfPage extends StatelessWidget {
 
         GestureRecognizer? numberRecognizer() {
           if (onTap != null) {
-            return TapGestureRecognizer()
-              ..onTap = () => onTap?.call(surah, v);
+            return TapGestureRecognizer()..onTap = () => onTap?.call(surah, v);
           }
           if (onLongPress != null ||
               onLongPressDown != null ||
               onLongPressUp != null) {
             final r = LongPressGestureRecognizer();
             r.onLongPress = () => onLongPress?.call(surah, v);
-            r.onLongPressStart =
-                (d) => onLongPressDown?.call(surah, v, d);
+            r.onLongPressStart = (d) => onLongPressDown?.call(surah, v, d);
             r.onLongPressUp = () => onLongPressUp?.call(surah, v);
             r.onLongPressEnd = (d) => onLongPressCancel?.call(surah, v);
             return r;
@@ -258,13 +273,11 @@ class NoorQcfPage extends StatelessWidget {
           return null;
         }
 
-        final verseBgColor =
-            theme.verseBackgroundColor?.call(surah, v) ??
+        final verseBgColor = theme.verseBackgroundColor?.call(surah, v) ??
             verseBackgroundColor?.call(surah, v);
-        final verseBgStyle =
-            verseBgColor != null
-                ? TextStyle(backgroundColor: verseBgColor)
-                : null;
+        final verseBgStyle = verseBgColor != null
+            ? TextStyle(backgroundColor: verseBgColor)
+            : null;
 
         // Verse Number Logic
         InlineSpan verseNumberSpan;
@@ -302,10 +315,9 @@ class NoorQcfPage extends StatelessWidget {
         // Safe glyph→word lookup: for the single best-effort verse
         // (13:10 — one glyph more than the text predicts) the extra
         // glyph maps to the last word instead of crashing.
-        int glyphWord(int ordinal) =>
-            ordinal < wordMap.glyphToWord.length
-                ? wordMap.glyphToWord[ordinal]
-                : wordMap.wordCount - 1;
+        int glyphWord(int ordinal) => ordinal < wordMap.glyphToWord.length
+            ? wordMap.glyphToWord[ordinal]
+            : wordMap.wordCount - 1;
 
         var glyphOrdinal = 0;
         var isFirstGlyph = true;
@@ -361,10 +373,9 @@ class NoorQcfPage extends StatelessWidget {
     //    the page could scroll, hiding lines below the fold.
     return LayoutBuilder(
       builder: (context, constraints) {
-        final viewportHeight =
-            constraints.maxHeight.isFinite
-                ? constraints.maxHeight
-                : screenSize.height;
+        final viewportHeight = constraints.maxHeight.isFinite
+            ? constraints.maxHeight
+            : screenSize.height;
         return Stack(
           children: [
             Scrollbar(
@@ -389,19 +400,17 @@ class NoorQcfPage extends StatelessWidget {
                             style: TextStyle(
                               fontFamily: pageFont,
                               package: 'qcf_quran',
-                              fontSize:
-                                  isPortrait
-                                      ? baseFontSize
-                                      : (pageNumber == 1 || pageNumber == 2)
+                              fontSize: isPortrait
+                                  ? baseFontSize
+                                  : (pageNumber == 1 || pageNumber == 2)
                                       ? 20 * sp
                                       : baseFontSize - (17 * sp),
                               color: theme.verseTextColor,
-                              height:
-                                  isPortrait
-                                      ? (pageNumber == 1 || pageNumber == 2)
-                                          ? 2.2 * h
-                                          : theme.verseHeight * h
-                                      : (pageNumber == 1 || pageNumber == 2)
+                              height: isPortrait
+                                  ? (pageNumber == 1 || pageNumber == 2)
+                                      ? 2.2 * h
+                                      : theme.verseHeight * h
+                                  : (pageNumber == 1 || pageNumber == 2)
                                       ? 4 *
                                           h // simplified based on user's manual edit evaluation
                                       : 4 *
@@ -456,7 +465,7 @@ class NoorQuranPageView extends StatefulWidget {
   /// Callback when a single WORD is tapped (per-word popup).
   /// Passed through to [NoorQcfPage.onWordTap].
   final void Function(int surahNumber, int verseNumber, int wordIndex)?
-  onWordTap;
+      onWordTap;
 
   /// Custom scroll physics for the PageView.
   final ScrollPhysics? physics;
