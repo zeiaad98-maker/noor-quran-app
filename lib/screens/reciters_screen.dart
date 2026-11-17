@@ -70,10 +70,32 @@ class _RecitersScreenState extends State<RecitersScreen> {
                         color: _green,
                       ),
                       const SizedBox(height: 4),
-                      Text(
-                        'جارٍ تحميل ${reciters[job.reciterIndex].name} — ${job.doneFiles} / ${job.totalFiles} (${(job.progress * 100).round()}٪)',
-                        style: GoogleFonts.amiri(
-                            fontSize: 13, color: _green),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            'جارٍ تحميل ${reciters[job.reciterIndex].name} — ${job.doneFiles} / ${job.totalFiles} (${(job.progress * 100).round()}٪)',
+                            style: GoogleFonts.amiri(
+                                fontSize: 13, color: _green),
+                          ),
+                          const SizedBox(width: 8),
+                          // Cancel (v13.2, best-apps rule 5): every
+                          // download shows a bar WITH Cancel — never
+                          // a spinner the user cannot stop.
+                          TextButton(
+                            onPressed: () => service.cancel(),
+                            style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 0),
+                              minimumSize: Size.zero,
+                              tapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            child: Text('إلغاء',
+                                style: GoogleFonts.amiri(
+                                    fontSize: 13, color: Colors.red)),
+                          ),
+                        ],
                       ),
                     ],
                   ),
