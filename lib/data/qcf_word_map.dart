@@ -129,6 +129,12 @@ const _markCodes = <int>{
 bool _isBaseLetter(int c) =>
     (c >= 0x0621 && c <= 0x064A) || c == 0x0671; // ٱ alef wasla
 
+/// Padding that is not part of a word: non-breaking space (U+00A0,
+/// joins a leading ۞ to its word), line feed and carriage return
+/// (one token carries a trailing '\n'). Stripped from the display
+/// spelling in [buildQcfWordMap] (v13.3 FIX D).
+bool _isWordPartPadding(int c) => c == 0x00A0 || c == 0x0A || c == 0x0D;
+
 /// Bare letters (diacritics / marks stripped, hamza forms unified,
 /// alef wasla unified to plain alef), for matching tokens against the
 /// joined-token split table and the exception tables.
@@ -233,7 +239,21 @@ QcfWordMap buildQcfWordMap(int surah, int verse) {
       continue;
     }
 
-    final wordPart = String.fromCharCodes(codes.sublist(start, end));
+    // v13.3 (FIX D): the bundled text joins a leading ۞ hizb marker
+    // to its word with a non-breaking space (199 verse-first words),
+    // and one token (37:24 word 3) carries a trailing '\n'. Both are
+    // data quirks, not part of the word — strip them so the card
+    // shows the bare word. The tap mapping itself was proven correct
+    // (triple check, 0 mismatches); this is display only.
+    var wordPart = String.fromCharCodes(codes.sublist(start, end));
+    while (wordPart.isNotEmpty &&
+        _isWordPartPadding(wordPart.codeUnitAt(0))) {
+      wordPart = wordPart.substring(1);
+    }
+    while (wordPart.isNotEmpty &&
+        _isWordPartPadding(wordPart.codeUnitAt(wordPart.length - 1))) {
+      wordPart = wordPart.substring(0, wordPart.length - 1);
+    }
     final bareWord = _bare(wordPart);
 
     // Leading marks (before the word): own glyph each, mapped to

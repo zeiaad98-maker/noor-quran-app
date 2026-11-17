@@ -120,11 +120,14 @@ void main() {
   test('failure pauses the job; retry resumes from the next file',
       () async {
     final requested = <String>[];
-    var failOnce = true;
+    // v13.3 (FIX A): _fetchToFile retries transient failures, so a
+    // failure that happens ONCE is absorbed and the job completes.
+    // The job pauses only on a HARD failure — fail 112002 every
+    // time in phase 1, then allow it for the retry run.
+    var failFile = true;
     final flaky = MockClient((request) async {
       requested.add(request.url.toString());
-      if (failOnce && request.url.path.endsWith('112002.mp3')) {
-        failOnce = false;
+      if (failFile && request.url.path.endsWith('112002.mp3')) {
         return http.Response('boom', 500);
       }
       return http.Response.bytes([7], 200);
@@ -141,6 +144,7 @@ void main() {
     expect(service.localAyahFile(reciters[0], 112, 1), isNotNull);
 
     // Retry: resumes after 112001, does not re-fetch it.
+    failFile = false;
     requested.clear();
     expect(await service.downloadSurahs(0, [112]), isTrue);
     await waitForIdle(service);

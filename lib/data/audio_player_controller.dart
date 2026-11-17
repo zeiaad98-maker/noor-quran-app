@@ -132,6 +132,34 @@ class AudioPlayerController extends ChangeNotifier {
     return left < 0 ? 0 : left;
   }
 
+  /// Download progress of the file currently being fetched (0..1),
+  /// or null when no download is in progress or the server gives no
+  /// length. The sheet, the mini bar and the word card show it while
+  /// loading, so the user sees the download moving instead of a bare
+  /// spinner (v13.3, FIX A). Updated from the download service's
+  /// per-chunk callback; notifications are throttled to whole
+  /// percent steps so the UI is not rebuilt on every chunk.
+  double? downloadProgress;
+  double _lastNotifiedProgress = -1;
+
+  /// Feeds [downloadProgress] from the download service (v13.3).
+  /// A null [total] means the server streams without a length: the
+  /// UI then shows an indeterminate bar.
+  void _onDownloadProgress(int received, int? total) {
+    if (_disposed) return;
+    if (total == null || total <= 0) {
+      downloadProgress = null;
+    } else {
+      downloadProgress = (received / total).clamp(0.0, 1.0);
+    }
+    final p = downloadProgress;
+    if (p == null) return;
+    if ((p - _lastNotifiedProgress).abs() >= 0.01 || p >= 1.0) {
+      _lastNotifiedProgress = p;
+      notifyListeners();
+    }
+  }
+
   bool _disposed = false;
 
   (int, int)? get currentAyah => queue.isEmpty ? null : queue[queueIndex];
@@ -367,8 +395,12 @@ class AudioPlayerController extends ChangeNotifier {
       // (v13.2 bug 2): the in-flight _playCurrent's finally{} skips
       // clearing when its token no longer matches — so stop() itself
       // clears it. The token check above keeps a NEWER load's
-      // spinner (started after this stop) untouched.
+      // spinner (started after this stop) untouched. The download
+      // progress goes away with the load (v13.3, FIX A); the
+      // in-flight download itself aborts via the token check the
+      // controller passed to the download service.
       isLoading = false;
+      downloadProgress = null;
       notifyListeners();
     }
   }
@@ -491,19 +523,16 @@ class AudioPlayerController extends ChangeNotifier {
     }
   }
 
-  /// Total budget for one play attempt (load + play), v13.2 bug 2:
-  /// every step below is time-boxed on its own, but the CHAIN (wbw
-  /// cache → wbw stream → legacy stream) could still spin the
-  /// indicator for ~3 minutes on a dying connection. The budget
-  /// caps the whole attempt: on expiry the attempt is invalidated
-  /// (token bump, so in-flight helpers bail before playing) and the
-  /// sheet shows the error with a retry. A retry then usually finds
-  /// the file already cached by the abandoned download.
-  ///
-  /// Mutable (not const) so tests can shorten it to prove the
-  /// expiry path without waiting 60 s; production always uses 60 s.
-  static Duration playBudget = const Duration(seconds: 60);
-
+  /// One play attempt (load + play). v13.3 (FIX A): there is NO
+  /// wall-clock budget on an attempt any more — the 60 s budget was
+  /// killing slow-but-working downloads, which is exactly what the
+  /// user forbade ("words must download at ANY speed, even the
+  /// slowest"). Every step still ends: downloads fail only on a
+  /// stall (no bytes for 30 s, see [AudioDownloadService]) or a
+  /// cancel (stop / a newer play, via the token check), and the
+  /// just_audio steps keep their own short timeouts below. A
+  /// superseded attempt's failure is never the user's error (see the
+  /// catches below).
   Future<void> _playCurrent({bool isReplay = false}) async {
     final ayah = currentAyah;
     if (ayah == null) return;
@@ -512,6 +541,8 @@ class AudioPlayerController extends ChangeNotifier {
     if (!isReplay) _itemPlays = 1;
     lastError = null;
     isLoading = true;
+    downloadProgress = null;
+    _lastNotifiedProgress = -1;
     notifyListeners();
 
     // Stop the previous audio FIRST, before any download await: the
@@ -523,17 +554,6 @@ class AudioPlayerController extends ChangeNotifier {
     await _player.stop();
     if (token != _playToken || _disposed) return;
 
-    // The budget timer: on expiry it invalidates this attempt (see
-    // [playBudget]). Cancelled in the finally below; it can only
-    // fire while this token is still current.
-    final budgetTimer = Timer(playBudget, () {
-      if (_disposed || token != _playToken) return;
-      _playToken++;
-      _finishToken = -1;
-      isLoading = false;
-      notifyListeners();
-      _reportError(_playCurrent);
-    });
     try {
       if (scope == PlayerScope.word) {
         await _playWordCurrent(token, ayah);
@@ -541,9 +561,17 @@ class AudioPlayerController extends ChangeNotifier {
         // Cache-on-play (v13): the ayah file is downloaded once and
         // played from disk after that — clear, pure and complete on
         // a weak connection, instant on repeat, offline after.
-        // A failed download falls back to streaming below.
+        // A failed download falls back to streaming below. The
+        // download reports honest progress and aborts when this
+        // attempt is superseded (v13.3, FIX A).
         final url = everyayahUrl(reciter, ayah.$1, ayah.$2);
-        final local = await downloads?.cacheAyahFile(reciter, ayah.$1, ayah.$2);
+        final local = await downloads?.cacheAyahFile(
+          reciter,
+          ayah.$1,
+          ayah.$2,
+          onProgress: _onDownloadProgress,
+          isCancelled: () => token != _playToken,
+        );
         if (token != _playToken || _disposed) return;
         // Bounded: the old bare setUrl could hang forever on a
         // stalled connection, leaving the spinner up with no sound
@@ -583,14 +611,12 @@ class AudioPlayerController extends ChangeNotifier {
     } catch (_) {
       if (token == _playToken) _reportError(_playCurrent);
     } finally {
-      budgetTimer.cancel();
       // A stale token's finally must not clear the newer load's
       // spinner (the old code did, so the spinner vanished while
-      // the new word was still loading). And when the budget timer
-      // fired above, it already cleared the spinner — this check
-      // (token mismatch by then) keeps that from being undone.
+      // the new word was still loading).
       if (!_disposed && token == _playToken) {
         isLoading = false;
+        downloadProgress = null;
         notifyListeners();
       }
     }
@@ -604,8 +630,8 @@ class AudioPlayerController extends ChangeNotifier {
   /// it, and whenever the seek failed the tap played the whole ayah
   /// (the user's #1 complaint) — so the fallback is GONE, not
   /// demoted. If the wbw file cannot be fetched, the sheet shows
-  /// the error with a retry. Every step is time-boxed (see
-  /// [playBudget]).
+  /// the error with a retry. The download itself has no wall-clock
+  /// limit (v13.3, FIX A): it fails only on a stall or a cancel.
   Future<void> _playWordCurrent(int token, (int, int) ayah) async {
     final qcfWord = wordIndex ?? 1;
     if (await _playWbwWord(token, ayah, qcfWord)) return;
@@ -639,8 +665,13 @@ class AudioPlayerController extends ChangeNotifier {
     final shifts = await wbwShiftsForAyah(ayah.$1, ayah.$2);
     if (token != _playToken || _disposed) return false;
     final fileNumber = wbwFileNumberFromShifts(shifts, audioPos);
-    final wbwLocal =
-        await downloads?.cacheWbwFile(ayah.$1, ayah.$2, fileNumber);
+    final wbwLocal = await downloads?.cacheWbwFile(
+      ayah.$1,
+      ayah.$2,
+      fileNumber,
+      onProgress: _onDownloadProgress,
+      isCancelled: () => token != _playToken,
+    );
     if (token != _playToken || _disposed) return false;
     if (wbwLocal != null &&
         await _loadLocal(wbwLocal, Duration.zero, token)) {
@@ -744,12 +775,19 @@ class AudioPlayerController extends ChangeNotifier {
     }
   }
 
+  /// The plain failure message (v13.3, FIX A — the approved sample's
+  /// exact wording). The old message that blamed the user's
+  /// connection is GONE: the user was right to be angry at it —
+  /// most people in the region have weak internet, and a word file
+  /// must download at any speed. This message says only that the
+  /// download failed and offers a retry; it never mentions strong
+  /// or weak internet.
   void _reportError(Future<void> Function() retry) {
     isPlaying = false;
-    lastError = 'تعذّر تشغيل الصوت — تحقق من الاتصال بالإنترنت وحاول مجدداً';
+    lastError = 'تعذّر تحميل الصوت — تحقق من الاتصال وحاول مجدداً';
     notifyListeners();
     onError?.call(
-      'الصوت يحتاج إنترنت قوي — تحقق من الاتصال وحاول مجدداً',
+      'تعذّر تحميل الصوت — تحقق من الاتصال وحاول مجدداً',
       retry,
     );
   }

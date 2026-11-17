@@ -10,6 +10,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'quran_audio.dart';
 
+/// Download progress (v13.3): bytes received so far + the total when
+/// the server reports a length (null when it streams without one).
+typedef DownloadProgressCallback = void Function(int received, int? total);
+
+/// Cancel check (v13.3): the player passes `() => token !=
+/// _playToken`, so a stop / newer play aborts an in-flight download
+/// instead of leaving a ghost load behind.
+typedef DownloadCancelCheck = bool Function();
+
 /// Per-reciter audio downloads (v12): the full Mushaf or selected
 /// surahs, downloaded in the background and played offline after.
 ///
@@ -99,7 +108,7 @@ class AudioDownloadService extends ChangeNotifier {
     return file.existsSync() ? file : null;
   }
 
-  /// Cache-on-play (v13): one ayah file, downloaded on demand the
+/// Cache-on-play (v13): one ayah file, downloaded on demand the
   /// first time it is played and reused from disk after that. This
   /// is what makes pronunciation clear and complete on a weak
   /// connection: the player plays a LOCAL file (no mid-play stutter,
@@ -108,8 +117,15 @@ class AudioDownloadService extends ChangeNotifier {
   /// surah downloads above, so a cached ayah also counts as
   /// downloaded for the downloads screen — and vice versa.
   /// Returns the file, or null when the download fails (the player
-  /// then falls back to streaming). Never throws.
-  Future<File?> cacheAyahFile(Reciter reciter, int surah, int ayah) async {
+  /// then falls back to streaming). Never throws. [onProgress] /
+  /// [isCancelled] are forwarded to the streamed download (v13.3).
+  Future<File?> cacheAyahFile(
+    Reciter reciter,
+    int surah,
+    int ayah, {
+    DownloadProgressCallback? onProgress,
+    DownloadCancelCheck? isCancelled,
+  }) async {
     final existing = localAyahFile(reciter, surah, ayah);
     if (existing != null) return existing;
     final dir = _baseDir;
@@ -117,6 +133,8 @@ class AudioDownloadService extends ChangeNotifier {
     final ok = await _fetchToFile(
       everyayahUrl(reciter, surah, ayah),
       File('${dir.path}/${reciter.everyayah}/${ayahFileName(surah, ayah)}.mp3'),
+      onProgress: onProgress,
+      isCancelled: isCancelled,
     );
     if (!ok) return null;
     return localAyahFile(reciter, surah, ayah);
@@ -128,12 +146,18 @@ class AudioDownloadService extends ChangeNotifier {
   /// the wbw FILE number (see [wbwFileNumberFromShifts]) — it is also
   /// the cache key, so one cached file serves one wbw recording.
   /// Tries the current CDN first, then the legacy host (v13.2).
-  /// Each attempt is 15 s (the files are tiny — if one has not
-  /// arrived in 15 s the connection is too slow for it; the word
-  /// path's total budget then reports the error instead of spinning
-  /// for a minute). Returns the file, or null when both downloads
-  /// fail (the player then reports the error). Never throws.
-  Future<File?> cacheWbwFile(int surah, int ayah, int fileNumber) async {
+  /// Each host is fetched by [_fetchToFile] (streamed, stall timeout
+  /// only, resume + retry — v13.3): a slow connection still gets
+  /// the file, it just takes longer; there is no "too slow" any
+  /// more. Returns the file, or null when both downloads fail (the
+  /// player then reports the error). Never throws.
+  Future<File?> cacheWbwFile(
+    int surah,
+    int ayah,
+    int fileNumber, {
+    DownloadProgressCallback? onProgress,
+    DownloadCancelCheck? isCancelled,
+  }) async {
     final existing = localWbwFile(surah, ayah, fileNumber);
     if (existing != null) return existing;
     final dir = _baseDir;
@@ -141,44 +165,209 @@ class AudioDownloadService extends ChangeNotifier {
     final file = File('${dir.path}/wbw/${ayahFileName(surah, ayah)}_'
         '${fileNumber.toString().padLeft(3, '0')}.mp3');
     if (await _fetchToFile(wbwWordUrl(surah, ayah, fileNumber), file,
-        timeoutSeconds: 15)) {
+        onProgress: onProgress, isCancelled: isCancelled)) {
       return localWbwFile(surah, ayah, fileNumber);
     }
     if (await _fetchToFile(
         wbwWordUrlLegacy(surah, ayah, fileNumber), file,
-        timeoutSeconds: 15)) {
+        onProgress: onProgress, isCancelled: isCancelled)) {
       return localWbwFile(surah, ayah, fileNumber);
     }
     return null;
   }
 
-  /// One file: GET ([timeoutSeconds], default 30 s), verify it is an
-  /// mp3 (non-empty), write it to disk ATOMICALLY (temp file +
-  /// rename) so a partial download is never mistaken for a complete
-  /// cached file. A failed or partial download leaves nothing
-  /// behind. Returns false on any failure. Never throws.
-  Future<bool> _fetchToFile(String url, File file,
-      {int timeoutSeconds = 30}) async {
-    try {
-      final response = await _client
-          .get(Uri.parse(url))
-          .timeout(Duration(seconds: timeoutSeconds));
-      if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
-        return false;
+  /// Download progress: bytes received so far + the total when the
+  /// server reports a length (null when it streams without one).
+  /// Stall timeout (v13.3): a download fails ONLY when no bytes
+  /// arrive for this long. There is NO wall-clock timeout on a
+  /// download: a 60 KB word file at 1 KB/s takes 60 s and still
+  /// succeeds — the user's rule is that words must download at ANY
+  /// speed, even the slowest. A stalled connection (silence) fails
+  /// instead of spinning forever, and the user can cancel any time.
+  /// Mutable so tests can shorten it; production always uses 30 s.
+  static Duration stallTimeout = const Duration(seconds: 30);
+
+  /// Attempts per URL (first + retries) and the pause between them.
+  /// Mutable so tests can shorten the backoff.
+  static int fetchAttempts = 2;
+  static Duration retryBackoff = const Duration(seconds: 2);
+
+  /// One file, streamed (v13.3 — the old whole-body GET with a
+  /// wall-clock timeout killed slow downloads mid-flight and kept
+  /// the entire file in memory). Retries [fetchAttempts] times with
+  /// [retryBackoff] between them — but only for TRANSIENT failures
+  /// (5xx, stall, early close, network error). A 4xx is definitive:
+  /// the server answered that this file is not here, so retrying
+  /// the same request cannot help — and for the wbw fallback it
+  /// would delay the legacy host for nothing. A cancel also returns
+  /// at once, with no backoff wait. Returns false on any failure.
+  /// Never throws.
+  Future<bool> _fetchToFile(
+    String url,
+    File file, {
+    DownloadProgressCallback? onProgress,
+    DownloadCancelCheck? isCancelled,
+  }) async {
+    for (var attempt = 1; attempt <= fetchAttempts; attempt++) {
+      if (isCancelled?.call() ?? false) return false;
+      final outcome = await _fetchOnce(url, file,
+          onProgress: onProgress, isCancelled: isCancelled);
+      if (outcome == _FetchOutcome.ok) return true;
+      if (outcome == _FetchOutcome.fatal) return false;
+      if (isCancelled?.call() ?? false) return false;
+      if (attempt < fetchAttempts) {
+        await Future.delayed(retryBackoff);
       }
+    }
+    return false;
+  }
+
+  /// One streamed attempt: GET with Range resume when a partial tmp
+  /// file from the SAME url exists, stream the body to disk chunk by
+  /// chunk (never the whole body in memory), fail only on a stall
+  /// (no bytes for [stallTimeout]) or a cancel. Writes to a tmp file
+  /// and renames atomically, so a partial download is never mistaken
+  /// for a complete cached file. A failed attempt's tmp is KEPT for
+  /// the next attempt to resume; a cancelled attempt's tmp is kept
+  /// too (the target file is untouched). The directory is created
+  /// only after the server answers OK, so a failed download leaves
+  /// no trace — not even an empty folder. Never throws.
+  Future<_FetchOutcome> _fetchOnce(
+    String url,
+    File file, {
+    DownloadProgressCallback? onProgress,
+    DownloadCancelCheck? isCancelled,
+  }) async {
+    final tmp = File('${file.path}.${_urlTag(url)}.tmp');
+    http.StreamedResponse? response;
+    IOSink? sink;
+    StreamSubscription<List<int>>? sub;
+    Timer? stallTimer;
+    try {
+      final existing = await tmp.exists() ? await tmp.length() : 0;
+      final request = http.Request('GET', Uri.parse(url));
+      if (existing > 0) request.headers['Range'] = 'bytes=$existing-';
+      // Headers must arrive within one stall window; the body then
+      // has its own per-chunk stall timer below.
+      response = await _client.send(request).timeout(stallTimeout);
+      if (response.statusCode == 416) {
+        // Our resume offset is past the end (the server file
+        // changed): drop the partial file; the retry starts fresh.
+        try {
+          await tmp.delete();
+        } catch (_) {}
+        return _FetchOutcome.retryable;
+      }
+      if (response.statusCode != 200 && response.statusCode != 206) {
+        // 4xx: the server answered definitively — retrying the same
+        // request cannot help. 5xx and anything else is transient.
+        final code = response.statusCode;
+        return code >= 400 && code < 500
+            ? _FetchOutcome.fatal
+            : _FetchOutcome.retryable;
+      }
+      var resumedFrom = 0;
+      int? total;
+      if (response.statusCode == 206) {
+        resumedFrom = existing;
+        final remaining = response.contentLength;
+        total = remaining != null && remaining >= 0
+            ? resumedFrom + remaining
+            : null;
+      } else {
+        // 200: the server ignored Range — restart from scratch.
+        if (existing > 0) {
+          try {
+            await tmp.delete();
+          } catch (_) {}
+        }
+        final len = response.contentLength;
+        total = len != null && len >= 0 ? len : null;
+      }
+      // Create the directory only now that the server answered OK:
+      // a failed download leaves no trace — not even an empty folder.
       final dir = file.parent;
       if (!await dir.exists()) await dir.create(recursive: true);
-      final tmp = File('${file.path}.tmp');
-      await tmp.writeAsBytes(response.bodyBytes);
-      await tmp.rename(file.path);
-      return true;
-    } catch (_) {
+      sink = tmp.openWrite(
+          mode: resumedFrom > 0 ? FileMode.append : FileMode.write);
+      final done = Completer<bool>();
+      var received = resumedFrom;
+      var failed = false;
+      void finish(bool ok) {
+        if (!done.isCompleted) done.complete(ok);
+      }
+
+      void armStall() {
+        stallTimer?.cancel();
+        stallTimer = Timer(stallTimeout, () async {
+          failed = true;
+          await sub?.cancel();
+          finish(false);
+        });
+      }
+
+      onProgress?.call(received, total);
+      armStall();
+      sub = response.stream.listen(
+        (chunk) {
+          if (isCancelled?.call() ?? false) {
+            failed = true;
+            unawaited(sub?.cancel());
+            finish(false);
+            return;
+          }
+          stallTimer?.cancel();
+          sink!.add(chunk);
+          received += chunk.length;
+          onProgress?.call(received, total);
+          armStall();
+        },
+        onError: (_) {
+          failed = true;
+          finish(false);
+        },
+        onDone: () => finish(!failed),
+        cancelOnError: true,
+      );
+      final ok = await done.future;
+      stallTimer?.cancel();
       try {
-        final tmp = File('${file.path}.tmp');
-        if (await tmp.exists()) await tmp.delete();
+        await sub.cancel();
       } catch (_) {}
-      return false;
+      await sink.flush();
+      await sink.close();
+      sink = null;
+      if (!ok) return _FetchOutcome.retryable;
+      final size = await tmp.length();
+      if (size == 0) return _FetchOutcome.retryable;
+      // The stream ended early: keep the tmp for resume next time.
+      if (total != null && size != total) return _FetchOutcome.retryable;
+      await tmp.rename(file.path);
+      return _FetchOutcome.ok;
+    } catch (_) {
+      return _FetchOutcome.retryable;
+    } finally {
+      stallTimer?.cancel();
+      try {
+        await sub?.cancel();
+      } catch (_) {}
+      try {
+        await sink?.close();
+      } catch (_) {}
     }
+  }
+
+  /// Short deterministic tag for a URL (FNV-1a over the code units):
+  /// the CDN and the legacy host serve the same file under the same
+  /// cache path, but their partial downloads must never be appended
+  /// to each other — each URL resumes only its own tmp file.
+  static String _urlTag(String url) {
+    var hash = 0x811c9dc5;
+    for (final c in url.codeUnits) {
+      hash ^= c;
+      hash = (hash * 0x01000193) & 0xFFFFFFFF;
+    }
+    return hash.toRadixString(16);
   }
 
   /// Start downloading [surahs] of the reciter (1–114). Ignored when
@@ -291,6 +480,14 @@ class AudioDownloadService extends ChangeNotifier {
     super.dispose();
   }
 }
+
+/// What one streamed attempt reports back (v13.3, FIX A):
+/// * [ok] — the file downloaded completely.
+/// * [retryable] — a transient failure (5xx, stall, early close,
+///   network error): worth one more attempt after [AudioDownloadService.retryBackoff].
+/// * [fatal] — a definitive failure (4xx): the server answered, so
+///   retrying the same request cannot help.
+enum _FetchOutcome { ok, retryable, fatal }
 
 enum DownloadStatus { downloading, done, failed, cancelled }
 

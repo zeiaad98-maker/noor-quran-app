@@ -61,6 +61,32 @@ class MiniAudioBar extends StatelessWidget {
                     style: TextStyle(fontSize: 12, color: Colors.black54),
                   ),
                 ),
+              // v13.3 (FIX A): honest download progress in the mini
+              // bar too — a thin bar under the loading label (and
+              // the percent next to it). The X button already stops
+              // the load (cancel).
+              if (controller.isLoading &&
+                  controller.downloadProgress != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: LinearProgressIndicator(
+                          value: controller.downloadProgress,
+                          backgroundColor: Colors.grey.shade300,
+                          color: _green,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        '${(controller.downloadProgress! * 100).round()}٪',
+                        style: const TextStyle(
+                            fontSize: 11, color: Colors.black54),
+                      ),
+                    ],
+                  ),
+                ),
               // While repeating, show how many plays remain (v13.2
               // bug B / best-apps rule 3) — only while a repeat play
               // is actually running or loading: once the sequence has
