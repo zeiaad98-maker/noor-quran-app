@@ -83,27 +83,16 @@ class AudioPlayerSheet extends StatelessWidget {
                   ),
                 const SizedBox(height: 8),
                 if (ayah != null) _currentLabelWidget(controller, surah!, verse!),
+                // v13.2: the word plays from Quran.com's dedicated
+                // per-word recording (wbw) — one fixed teaching
+                // voice, complete by construction. Say so plainly:
+                // it is NOT the selected reciter's voice.
                 if (controller.scope == PlayerScope.word &&
                     controller.wordUsesWbw)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
                     child: Text(
-                      'تسجيل الكلمة بصوت موحّد — هذا القارئ ليس له مقاطع كلمة-بكلمة خاصة به',
-                      textAlign: TextAlign.center,
-                      style: GoogleFonts.amiri(fontSize: 12, color: Colors.grey),
-                    ),
-                  ),
-                // v13.1: when the selected reciter has no word
-                // segments, the word plays in محمود الحصري's voice
-                // (his own real recording, cached on play) — say so
-                // plainly, never as the selected reciter's voice.
-                if (controller.scope == PlayerScope.word &&
-                    !controller.wordUsesWbw &&
-                    controller.wordUsesHusaryFallback)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      'الكلمة بصوت محمود الحصري — القارئ المختار ليس له مقاطع كلمة-بكلمة خاصة به',
+                      'الكلمة بصوت تعليمي موحّد — تسجيل خاص للكلمة، وليست بصوت القارئ المختار',
                       textAlign: TextAlign.center,
                       style: GoogleFonts.amiri(fontSize: 12, color: Colors.grey),
                     ),
@@ -165,6 +154,28 @@ class AudioPlayerSheet extends StatelessWidget {
                     ),
                   ],
                 ),
+                // While repeating, show how many plays remain (v13.2
+                // bug B / best-apps rule 3): the user must see the
+                // repeat working and when it will stop. Count 0
+                // (مستمر) shows "تكرار مستمر" instead of a number.
+                // Only while a repeat play is running or loading:
+                // once the sequence has stopped, the count is spent
+                // and the line goes away.
+                if (controller.repeatItem &&
+                    (controller.isPlaying || controller.isLoading))
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                      controller.repeatCount == 0
+                          ? 'التكرار: مستمر — أوقفْه بزر التكرار'
+                          : 'التكرار: متبقٍ ${controller.repeatRemaining} ${_repeatUnit(controller.repeatRemaining)}',
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.amiri(
+                          fontSize: 13,
+                          color: _green,
+                          fontWeight: FontWeight.bold),
+                    ),
+                  ),
                 if (onOpenDownloads != null) ...[
                   const SizedBox(height: 10),
                   TextButton.icon(
@@ -593,6 +604,13 @@ class AudioPlayerSheet extends StatelessWidget {
       textAlign: TextAlign.center,
       style: GoogleFonts.amiri(fontSize: 15, color: textColor),
     );
+  }
+
+  /// Arabic unit for the remaining-repeat count (1 مرة، 2 مرتان، 3+ مرات).
+  static String _repeatUnit(int count) {
+    if (count == 1) return 'مرة';
+    if (count == 2) return 'مرتان';
+    return 'مرات';
   }
 
   Widget _repeatScopePill() {
