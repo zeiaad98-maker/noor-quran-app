@@ -40,6 +40,8 @@ void main() {
     expect(maher.quranComRecitationId, isNull);
     expect(quranComAyahUrl(maher, 2, 7), isNull);
     expect(wbwWordUrl(2, 7, 1),
+        'https://audio.qurancdn.com/wbw/002_007_001.mp3');
+    expect(wbwWordUrlLegacy(2, 7, 1),
         'https://verses.quran.com/wbw/002_007_001.mp3');
   });
 
