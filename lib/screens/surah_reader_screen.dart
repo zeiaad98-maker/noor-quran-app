@@ -11,6 +11,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../data/audio_downloads.dart';
 import '../data/audio_player_controller.dart';
+import '../data/ayah_marks.dart';
 import '../data/ayah_notes.dart';
 import '../data/quran_audio.dart';
 import '../data/tafsir_downloads.dart';
@@ -67,6 +68,10 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
   // AudioPlayerSheet.
   bool _showMiniBar = false;
   Set<String> _notedAyahIds = {};
+  // v13.3 (FIX B): bookmarked (فاصل) and coloured (تلوين) ayahs,
+  // loaded with the noted ids to tint the page.
+  Set<String> _bookmarkedAyahIds = {};
+  Set<String> _highlightedAyahIds = {};
   Timer? _clockTimer;
   String _currentTime = '';
 
@@ -146,6 +151,7 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
     unawaited(WakelockPlus.enable());
     _loadSettings();
     _loadNotedAyahs();
+    _loadMarkedAyahs();
     _updateClock();
     _clockTimer =
         Timer.periodic(const Duration(seconds: 1), (_) => _updateClock());
@@ -174,6 +180,38 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
   Future<void> _loadNotedAyahs() async {
     final ids = await AyahNotes.notedIds();
     if (mounted) setState(() => _notedAyahIds = ids);
+  }
+
+  /// Bookmarked (فاصل) and coloured (تلوين) ayahs (v13.3, FIX B):
+  /// reloaded whenever a card / sheet that can toggle them closes,
+  /// so the page tint follows the toggle immediately.
+  Future<void> _loadMarkedAyahs() async {
+    final results = await Future.wait([
+      AyahBookmarks.ids(),
+      AyahHighlights.ids(),
+    ]);
+    if (mounted) {
+      setState(() {
+        _bookmarkedAyahIds = results[0];
+        _highlightedAyahIds = results[1];
+      });
+    }
+  }
+
+  /// Page tint for a marked ayah (v13.3, FIX B): a coloured ayah
+  /// (تلوين) gets a green tint; a noted or bookmarked ayah (فاصل)
+  /// gets the gold tint. Colour wins when an ayah carries both.
+  Color? _ayahTint(int surah, int verse, {required bool dark}) {
+    final id = '$surah:$verse';
+    if (_highlightedAyahIds.contains(id)) {
+      return const Color(0xFF0D6E52).withValues(alpha: dark ? 0.30 : 0.22);
+    }
+    if (_notedAyahIds.contains(id) || _bookmarkedAyahIds.contains(id)) {
+      return dark
+          ? const Color(0xFF8A723D).withValues(alpha: 0.35)
+          : const Color(0xFFFFF3C4).withValues(alpha: 0.7);
+    }
+    return null;
   }
 
   Future<void> _loadSettings() async {
@@ -534,6 +572,7 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
       surah: surah,
       verse: verse,
       wordIndex: wordIndex,
+      audioController: _audioController,
       onPlayWord: (word) {
         unawaited(_audioController.playWord(surah, verse, word + 1));
         if (mounted) setState(() => _showMiniBar = true);
@@ -542,7 +581,11 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
         unawaited(_audioController.playAyah(surah, verse));
         if (mounted) setState(() => _showMiniBar = true);
       },
-    );
+      // تعليقات opens the ayah sheet (note editor lives there);
+      // التفسير opens the tafsir card. The card pops itself first.
+      onOpenNotes: () => _openAyahSheet(surah, verse),
+      onOpenTafsir: () => _openTafsirCard(surah, verse),
+    ).then((_) => _loadMarkedAyahs());
   }
 
   /// Long-press a word plays its whole AYAH (v13.2, UX D /
@@ -591,9 +634,7 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
             verseNumberColor: const Color(0xFFD2BA80),
             verseHeight: 2.1,
             verseBackgroundColor: (surah, verse) =>
-                _notedAyahIds.contains('$surah:$verse')
-                    ? const Color(0xFF8A723D).withValues(alpha: 0.35)
-                    : null,
+                _ayahTint(surah, verse, dark: true),
           )
         : QcfThemeData(
             pageBackgroundColor: bgColor,
@@ -603,9 +644,7 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
             headerTextColor: const Color(0xFF1A1A1A),
             verseHeight: 2.1,
             verseBackgroundColor: (surah, verse) =>
-                _notedAyahIds.contains('$surah:$verse')
-                    ? const Color(0xFFFFF3C4).withValues(alpha: 0.7)
-                    : null,
+                _ayahTint(surah, verse, dark: false),
           );
 
     // Calibrated QCF font scale: the qcf_quran example uses sp = 1.sp
