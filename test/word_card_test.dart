@@ -119,6 +119,8 @@ void main() {
 
     Future<void> openCard(WidgetTester tester) async {
       playedWords = <int>[];
+      // The card loads bookmark/highlight/note marks from prefs.
+      SharedPreferences.setMockInitialValues({});
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
@@ -129,8 +131,11 @@ void main() {
                   surah: 3,
                   verse: 7,
                   wordIndex: 7,
+                  audioController: AudioPlayerController(),
                   onPlayWord: playedWords.add,
                   onPlayAyah: () {},
+                  onOpenNotes: () {},
+                  onOpenTafsir: () {},
                 ),
                 child: const Text('open'),
               ),
@@ -160,20 +165,26 @@ void main() {
       expect(find.text('الآية'), findsNothing);
       expect(find.text('علوم السورة'), findsNothing);
       expect(find.text(quran.getVerse(3, 7)), findsNothing);
-      // Toolbar + counter (Arabic-Indic digits, never "8 / 46").
-      for (final label in ['استمع', 'صرف', 'إعراب']) {
+      // Toolbar (v13.3, SurahApp-style): the five actions; صرف/إعراب
+      // live inside المزيد, NOT on the bar itself.
+      for (final label in ['استمع', 'فاصل', 'تلوين', 'تعليقات', 'المزيد']) {
         expectFullyVisible(tester, find.text(label));
       }
+      expect(find.text('صرف'), findsNothing);
+      expect(find.text('إعراب'), findsNothing);
+      // Counter (Arabic-Indic digits, never "8 / 46").
       expect(find.text('الكلمة ٨ من ٤٦'), findsOneWidget);
       expect(find.textContaining(' / '), findsNothing);
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('صرف shows the parsed fields, إعراب the morph text',
+    testWidgets('المزيد → صرف shows the parsed fields, إعراب the morph text',
         (tester) async {
       set411(tester);
       await openCard(tester);
 
+      await tester.tap(find.text('المزيد'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('صرف'));
       await tester.pump();
       expect(find.text('حكم'), findsOneWidget);
@@ -182,6 +193,8 @@ void main() {
       expect(find.textContaining('حْكَمَة'), findsOneWidget);
       expect(find.textContaining('جمع مؤنث سالم'), findsOneWidget);
 
+      await tester.tap(find.text('المزيد'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('إعراب'));
       await tester.pump();
       expect(

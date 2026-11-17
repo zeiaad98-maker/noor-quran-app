@@ -165,28 +165,25 @@ void main() {
       expect(controller.lastError, isNull);
     });
 
-    test('a load slower than the budget errors and clears the spinner',
+    // v13.3 (FIX A): the wall-clock budget is DELETED — a slow
+    // download must still complete (stall timeout only, no time
+    // limit). A 2 s load that used to trip the 300 ms budget now
+    // plays through, with no error and no spinner left behind.
+    test('a slow load completes — no wall-clock budget any more',
         () async {
       controller.reciterIndex = 12;
       fake.loadDelay = const Duration(seconds: 2);
-      final oldBudget = AudioPlayerController.playBudget;
-      AudioPlayerController.playBudget =
-          const Duration(milliseconds: 300);
-      addTearDown(
-          () => AudioPlayerController.playBudget = oldBudget);
 
       final playFuture = controller.playAyah(2, 33);
-      await settle(800); // budget (300 ms) fired; load still pending
-      expect(controller.isLoading, isFalse,
-          reason: 'the budget invalidates the attempt');
-      expect(controller.lastError, isNotNull,
-          reason: 'the sheet shows the error with a retry');
-      expect(controller.isPlaying, isFalse);
+      await settle(800); // past the old 300 ms budget
+      expect(controller.isLoading, isTrue,
+          reason: 'still loading — nothing times out on a clock');
+      expect(controller.lastError, isNull);
 
-      await playFuture; // the abandoned load bails silently
-      await settle(1500); // past the 2 s load
-      expect(controller.isPlaying, isFalse);
+      await playFuture;
+      expect(controller.isPlaying, isTrue);
       expect(controller.isLoading, isFalse);
+      expect(controller.lastError, isNull);
     });
   });
 
@@ -357,8 +354,11 @@ void main() {
                   surah: 3,
                   verse: 7,
                   wordIndex: 7,
+                  audioController: AudioPlayerController(),
                   onPlayWord: (_) {},
                   onPlayAyah: () => playedAyahs.add((3, 7)),
+                  onOpenNotes: () {},
+                  onOpenTafsir: () {},
                 ),
                 child: const Text('open'),
               ),
