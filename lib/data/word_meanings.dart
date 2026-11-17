@@ -135,13 +135,202 @@ class QuranWordData {
   /// Meaning of one tapped word, matched by normalized form.
   /// غريب القرآن entries come first (ayah-specific); when the word has
   /// no special meaning there, the root lexicon (مفردات الراغب) is
-  /// consulted. Returns null only when neither source has anything.
+  /// consulted. v13.2: the returned text is [shortenGloss]-shortened,
+  /// so the word card AND the meaning sheet both show the short plain
+  /// gloss (the user: "اختصر وهيك بس يكون مفهوم المعنى").
+  /// Returns null only when neither source has anything.
   static Future<String?> meaningForWord(
       int surah, int verse, String word) async {
     final entries = await meaningsForAyah(surah, verse);
     final gharib = _matchWord(entries, word);
-    if (gharib != null) return gharib;
-    return lexiconForWord(surah, verse, word);
+    if (gharib != null) return shortenGloss(gharib);
+    final lex = await lexiconForWord(surah, verse, word);
+    if (lex != null) return shortenGloss(lex);
+    return null;
+  }
+
+  /// Hard cap for any displayed word meaning (v13.2). A gloss is
+  /// "short" when it fits in one or two lines of the word card.
+  static const int maxGlossLength = 160;
+
+  /// Soft target for a shortened gloss: the first sentence / first
+  /// clause of a dictionary entry usually fits in ~120 chars.
+  static const int _shortGlossTarget = 120;
+
+  /// A gloss shorter than this is treated as a fragment (bare
+  /// headword, "يقال: ..." usage note, ...) that may not explain the
+  /// word on its own: the next sentence/clause is kept too, so the
+  /// meaning stays UNDERSTOOD (the user's condition), up to the
+  /// [maxGlossLength] hard cap.
+  static const int _minClearGloss = 25;
+
+  /// A sentence/clause that starts a citation ("قال الشاعر ...",
+  /// "قيل ...") adds poetry / a quotation, not meaning: skipped when
+  /// appending extra text for clarity, never skipped when it IS the
+  /// first sentence (then the entry itself starts with a quote).
+  static bool _isCitation(String text) =>
+      text.startsWith('قال') || text.startsWith('قيل');
+
+  /// Split [text] into sentences at Arabic/English sentence
+  /// terminators (؛ . 。), keeping each terminator, trimming parts.
+  static List<String> _sentences(String text) {
+    final out = <String>[];
+    final buf = StringBuffer();
+    for (var i = 0; i < text.length; i++) {
+      final ch = text[i];
+      buf.write(ch);
+      if (ch == '。' || ch == '؛' || ch == '.') {
+        final s = buf.toString().trim();
+        if (s.isNotEmpty) out.add(s);
+        buf.clear();
+      }
+    }
+    final rest = buf.toString().trim();
+    if (rest.isNotEmpty) out.add(rest);
+    return out;
+  }
+
+  /// Cut [text] at the last word boundary at or before [cap] chars
+  /// and mark the cut with "…". Only used when no sentence/clause
+  /// boundary can bring the text under the cap.
+  static String _truncateAtWord(String text, int cap) {
+    if (text.length <= cap) return text;
+    final cut = text.substring(0, cap);
+    final sp = cut.lastIndexOf(' ');
+    return '${sp > 0 ? cut.substring(0, sp) : cut}…';
+  }
+
+  /// Shorten a bundled meaning to a short plain gloss (≤
+  /// [maxGlossLength] chars, usually ≤ ~120). TRUNCATION ONLY: it
+  /// never rewrites or invents — it keeps the entry's own words.
+  ///
+  /// 1. Already short (≤ ~120 chars)? Return as-is.
+  /// 2. Else the FIRST sentence only (cut at the first 。/؛/.).
+  /// 3. Clarity guard: if that first sentence is a fragment
+  ///    (< 25 chars — bare headword, "يقال: ..." note), keep the
+  ///    next sentence too (skipping citation sentences), up to the
+  ///    160-char cap, so the meaning stays understood.
+  /// 4. If the result is still > ~120 chars, keep its first clause
+  ///    (up to the first ،), plus following clauses only while the
+  ///    text is still a fragment (< 25 chars) — never a citation
+  ///    clause.
+  /// 5. Hard cap 160 chars at a word boundary ("…").
+  static String shortenGloss(String text) {
+    final s = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (s.length <= _shortGlossTarget) return s;
+    final sentences = _sentences(s);
+    if (sentences.isEmpty) return _truncateAtWord(s, _shortGlossTarget);
+    var result = sentences[0];
+    var i = 1;
+    while (result.length < _minClearGloss && i < sentences.length) {
+      final next = sentences[i];
+      i++;
+      if (_isCitation(next)) continue;
+      if (result.length + 1 + next.length <= maxGlossLength) {
+        result = '$result $next';
+      } else {
+        for (final part in next.split('،')) {
+          final p = part.trim();
+          if (p.isEmpty || _isCitation(p)) continue;
+          final joiner = result.endsWith('.') ||
+                  result.endsWith('。') ||
+                  result.endsWith('؛')
+              ? ' '
+              : '، ';
+          if (result.length + joiner.length + p.length <= maxGlossLength) {
+            result = result + joiner + p;
+          } else {
+            break;
+          }
+        }
+        break;
+      }
+    }
+    if (result.length > _shortGlossTarget) {
+      final parts =
+          result.split('،').map((e) => e.trim()).toList(growable: false);
+      var acc = parts[0];
+      for (var j = 1; j < parts.length; j++) {
+        if (acc.length >= _minClearGloss) break;
+        final p = parts[j];
+        if (_isCitation(p)) continue;
+        if (acc.length + 2 + p.length <= _shortGlossTarget) {
+          acc = '$acc، $p';
+        } else {
+          break;
+        }
+      }
+      result = acc;
+    }
+    if (result.length > maxGlossLength) {
+      result = _truncateAtWord(result, maxGlossLength - 3);
+    }
+    return result.trim();
+  }
+
+  /// Length distribution of the gloss [wordGloss] actually displays
+  /// for every word of the Mushaf (same matching as [coverageStats],
+  /// with [shortenGloss] applied to the meaning branches): total
+  /// words, words with a (shortened) meaning, median and max
+  /// displayed-gloss length, and how many glosses exceed 160 / 120
+  /// chars (v13.2: over160 must be 0).
+  static Future<
+      ({
+        int total,
+        int withShortMeaning,
+        int medianLength,
+        int maxLength,
+        int over160,
+        int over120
+      })> glossLengthStats() async {
+    await ensureLoaded();
+    final lengths = <int>[];
+    var withShortMeaning = 0;
+    for (final ayah in _morphology!.entries) {
+      final key = ayah.key;
+      final rawMeanings = _meanings![key];
+      final meaningEntries = rawMeanings == null
+          ? <(String, String)>[]
+          : (rawMeanings as List<dynamic>)
+              .map((e) => (e[0] as String, e[1] as String))
+              .toList(growable: false);
+      for (final w in ayah.value as List<dynamic>) {
+        final word = w[0] as String;
+        final desc = w.length >= 2 ? w[1] as String : '';
+        String gloss;
+        final gharib = _matchWord(meaningEntries, word);
+        if (gharib != null) {
+          gloss = shortenGloss(gharib);
+          withShortMeaning++;
+        } else {
+          final lex = _lexiconLookup(desc);
+          if (lex != null) {
+            gloss = shortenGloss(lex);
+            withShortMeaning++;
+          } else if (desc.isNotEmpty) {
+            gloss = desc;
+          } else {
+            gloss = 'كلمة من كلمات القرآن الكريم';
+          }
+        }
+        lengths.add(gloss.length);
+      }
+    }
+    lengths.sort();
+    var over160 = 0;
+    var over120 = 0;
+    for (final l in lengths) {
+      if (l > 160) over160++;
+      if (l > 120) over120++;
+    }
+    return (
+      total: lengths.length,
+      withShortMeaning: withShortMeaning,
+      medianLength: lengths.isEmpty ? 0 : lengths[lengths.length ~/ 2],
+      maxLength: lengths.isEmpty ? 0 : lengths.last,
+      over160: over160,
+      over120: over120,
+    );
   }
 
   /// Root (e.g. "نزل") from a morphology description such as
@@ -215,7 +404,9 @@ class QuranWordData {
   /// definition, else the (real, bundled) morphology description
   /// (type/root/pattern — e.g. "حرف جر" for عَلَيْكَ), else a plain
   /// statement that it is a Quranic word. Nothing here is invented:
-  /// every branch comes from a bundled source.
+  /// every branch comes from a bundled source. v13.2: meaning
+  /// branches are [shortenGloss]-shortened (≤ 160 chars); the
+  /// morphology fallback is already short (measured max 145 chars).
   static Future<String> wordGloss(
       int surah, int verse, String word) async {
     final meaning = await meaningForWord(surah, verse, word);
