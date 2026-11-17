@@ -20,10 +20,15 @@ import 'package:noor_quran/widgets/noor_qcf_page.dart';
 //   1a. Page-grouping simulation over ALL 6236 verses: the grouping
 //       the live page does (glyph ordinal -> span -> wordIndex) must
 //       reproduce buildQcfWordMap's words exactly.
-//   1b. The REAL Dart file-number functions (audioPositionForQcfWord
-//       + wbwFileNumberFromShifts, shifts from the bundled JSON)
-//       against the Quran.com API ground truth (/tmp/v133_api_gt.json,
-//       77,429 words), plus the map's word TEXTS vs the API texts.
+//   1b. The REAL Dart file-number rule (v13.4: file == audio
+//       position from audioPositionForQcfWord, no shift table)
+//       against the Quran.com API ground truth
+//       (/home/hatch/workspace/noor-quran-v1/v133_api_gt.json,
+//       77,433 display positions), plus the map's word TEXTS vs
+//       the API texts. The API's 'f' disagrees with position
+//       numbering in exactly 27,964 places — pinned as proof the
+//       API field is wrong relative to its own files, never as a
+//       failure.
 //   1c. Edge cases pinned: 13:10, 2:181, 8:6, 13:37, 37:130, 15:7,
 //       27:20, 36:22, 27:26, Baqarah 2:6-2:16.
 //   1d/1e/3. WIDGET tests with the real production page: invoke every
@@ -213,18 +218,24 @@ void main() {
     expect(drift, isEmpty);
   });
 
-  test('1b: Dart file numbers + word texts vs API ground truth', () {
+  test('1b: Dart file numbers (== audio position) + word texts vs API',
+      () {
     final gt = _loadJson(
         '/home/hatch/workspace/noor-quran-v1/v133_api_gt.json');
-    final shiftsJson = _loadJson(
-        'assets/quran_data/word_wbw_shifts.json');
-    expect(shiftsJson.length, 2705,
-        reason: 'shift table must cover 2,705 ayahs');
-    final fileMismatch = <String>[];
+    // v13.4: the file number IS the audio position — no shift table.
+    // The API's 'f' is NOT the file to request: it counts pause
+    // marks as positions and disagrees with position numbering in
+    // exactly 27,963 of 77,433 positions (2,705 ayahs) — that
+    // disagreement is the API being wrong relative to its own
+    // files (proven by transcription), so it is counted here as
+    // documentation, never as a failure. (One position, 36:52
+    // word 7 هَـٰذَا, has NO audio_url in the API at all — null —
+    // and is skipped here; file 007 exists and speaks it.)
+    final apiDisagree = <String>[];
+    final rangeError = <String>[];
     final textMismatch = <String>[];
     final countMismatch = <String>[];
     var checked = 0;
-    var filesChecked = 0;
     for (var s = 1; s <= 114; s++) {
       for (var v = 1; v <= quran.getVerseCount(s); v++) {
         final key = '$s:$v';
@@ -238,28 +249,22 @@ void main() {
               '$key map=${map.wordCount} api=${apiWords.length}');
           continue;
         }
-        final shifts = (shiftsJson[key] as List?)
-                ?.map((e) => (e as num).toInt())
-                .toList() ??
-            const <int>[];
         for (var d = 1; d <= map.wordCount; d++) {
           checked++;
           final audioPos = audioPositionForQcfWord(s, v, d);
           // The controller's guard (audioPos <= tokens.length) must
           // never reject a real tap.
           if (audioPos < 1 || audioPos > apiWords.length) {
-            fileMismatch.add('$key display $d -> audioPos $audioPos '
+            rangeError.add('$key display $d -> audioPos $audioPos '
                 'out of ${apiWords.length}');
             continue;
           }
-          final file = wbwFileNumberFromShifts(shifts, audioPos);
-          final expectedFile = apiWords[audioPos - 1]['f'] as int?;
-          if (expectedFile != null) {
-            filesChecked++;
-            if (file != expectedFile) {
-              fileMismatch.add('$key display $d audioPos $audioPos '
-                  'dart=$file api=$expectedFile');
-            }
+          // v13.4 rule: file == audioPos. The API's number is
+          // recorded only to pin how far it disagrees.
+          final apiFile = apiWords[audioPos - 1]['f'] as int?;
+          if (apiFile != null && apiFile != audioPos) {
+            apiDisagree.add('$key display $d audioPos $audioPos '
+                'api=$apiFile');
           }
         }
         // Word texts: display words vs the API word at the same
@@ -292,13 +297,12 @@ void main() {
       }
     }
     // ignore: avoid_print
-    print('1b: positions=$checked files=$filesChecked '
-        'fileMismatch=${fileMismatch.length} '
+    print('1b: positions=$checked apiDisagree=${apiDisagree.length} '
         'textMismatch=${textMismatch.length} '
         'countMismatch=${countMismatch.length}');
-    for (final m in fileMismatch.take(20)) {
+    for (final m in apiDisagree.take(5)) {
       // ignore: avoid_print
-      print('  FILE $m');
+      print('  API-DISAGREE $m');
     }
     for (final m in textMismatch.take(20)) {
       // ignore: avoid_print
@@ -308,7 +312,17 @@ void main() {
       // ignore: avoid_print
       print('  COUNT $m');
     }
-    expect(fileMismatch, isEmpty);
+    expect(rangeError, isEmpty);
+    expect(checked, 77433);
+    expect(apiDisagree.length, 27963,
+        reason: 'the API disagrees with position numbering in exactly '
+            '27,963 places — that is the API being wrong, not the app');
+    // Key cases (transcription-proven): the API says 016/012/002/
+    // 056, the file that speaks the word is 015/011/001/048.
+    expect((gt['3:7']['words'] as List)[14]['f'], 16);
+    expect((gt['2:81']['words'] as List)[10]['f'], 12);
+    expect((gt['2:26']['words'] as List)[0]['f'], 2);
+    expect((gt['2:255']['words'] as List)[47]['f'], 56);
     // Exactly one known TEXT quirk in the underlying data (NOT a tap
     // error — both independent passes agree, indices and files are
     // right). Pinned by location only (the word spelling contains
@@ -355,35 +369,24 @@ void main() {
     expect(audioPositionForQcfWord(37, 130, 3), 3);
     expect(audioPositionForQcfWord(37, 130, 4), 3);
 
-    // 2:181 file 011 is SKIPPED (the ۚ after word 9 counts as a
-    // position): display 12 (ٱللَّهَ) is file 12, not 11.
-    final shifts2181 = (jsonDecode(File(
-                    'assets/quran_data/word_wbw_shifts.json')
-                .readAsStringSync()) as Map<String, dynamic>)['2:181']
-            as List;
-    expect(
-        wbwFileNumberFromShifts(
-            shifts2181.map((e) => (e as num).toInt()).toList(),
-            audioPositionForQcfWord(2, 181, 12)),
-        12);
-    expect(
-        wbwFileNumberFromShifts(
-            shifts2181.map((e) => (e as num).toInt()).toList(),
-            audioPositionForQcfWord(2, 181, 10)),
-        9);
-    // 37:130 display word 4 (يَاسِينَ) is file 3 — file 004 does
-    // not exist and must never be requested.
-    final shifts37130 = (jsonDecode(File(
-                    'assets/quran_data/word_wbw_shifts.json')
-                .readAsStringSync()) as Map<String, dynamic>)['37:130'];
-    final s37130 = (shifts37130 as List?)
-            ?.map((e) => (e as num).toInt())
-            .toList() ??
-        const <int>[];
-    expect(
-        wbwFileNumberFromShifts(
-            s37130, audioPositionForQcfWord(37, 130, 4)),
-        3);
+    // 2:181: display 12 (ٱللَّهَ) is audio position 11 (the merged
+    // pair بَعۡدَ مَا shifts everything after it down by one), so
+    // its file is 011 — the number the old shift table claimed was
+    // SKIPPED (the ۚ after word 10 counted as a position). It is
+    // not skipped: file 011 speaks ٱللَّهَ (transcribed 2026-11-17,
+    // both ASR models).
+    expect(audioPositionForQcfWord(2, 181, 12), 11);
+    expect(wbwWordUrl(2, 181, audioPositionForQcfWord(2, 181, 12)),
+        'https://audio.qurancdn.com/wbw/002_181_011.mp3');
+    expect(audioPositionForQcfWord(2, 181, 10), 9);
+    expect(wbwWordUrl(2, 181, audioPositionForQcfWord(2, 181, 10)),
+        'https://audio.qurancdn.com/wbw/002_181_009.mp3');
+    // 37:130 display word 4 (يَاسِينَ) is audio position 3, file
+    // 003 — file 004 does not exist and must never be requested
+    // (37:130 has only 3 audio words).
+    expect(audioPositionForQcfWord(37, 130, 4), 3);
+    expect(wbwWordUrl(37, 130, audioPositionForQcfWord(37, 130, 4)),
+        'https://audio.qurancdn.com/wbw/037_130_003.mp3');
 
     // 15:7 joined token + typo fix; 27:20 / 36:22 splits.
     final m157 = buildQcfWordMap(15, 7);
