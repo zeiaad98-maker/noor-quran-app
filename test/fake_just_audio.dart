@@ -69,6 +69,19 @@ class FakeJustAudioPlatform extends JustAudioPlatform {
 
   bool autoFinish = true;
 
+  /// Load-failure injection (v13.2, for fallback-chain tests): any
+  /// load whose URI contains one of these substrings throws a
+  /// PlatformException, like the real platform on a failed load.
+  /// The URI is still recorded in [loadUris] first, so the test can
+  /// assert the attempt happened.
+  final Set<String> failLoadSubstrings = {};
+
+  /// Artificial delay for every [FakeAudioPlayerPlatform.load]
+  /// (v13.2, for race tests): a slow load lets the test inject a
+  /// stale finish / a stop mid-load and prove the controller handles
+  /// it — the real load is instant in the fake.
+  Duration loadDelay = Duration.zero;
+
   FakeAudioPlayerPlatform get player => players.last;
 
   /// Total loads across ALL players created so far (just_audio
@@ -92,6 +105,8 @@ class FakeJustAudioPlatform extends JustAudioPlatform {
     final created = FakeAudioPlayerPlatform(
       'fake-${players.length}',
       autoFinish: autoFinish,
+      failLoadSubstrings: failLoadSubstrings,
+      loadDelay: loadDelay,
     );
     players.add(created);
     return created;
@@ -111,14 +126,26 @@ class FakeJustAudioPlatform extends JustAudioPlatform {
 }
 
 class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
-  FakeAudioPlayerPlatform(super.id, {required this.autoFinish});
+  FakeAudioPlayerPlatform(super.id,
+      {required this.autoFinish,
+      required this.failLoadSubstrings,
+      this.loadDelay = Duration.zero});
 
   final _playbackEvents = StreamController<PlaybackEventMessage>.broadcast();
   final _playerData = StreamController<PlayerDataMessage>.broadcast();
 
+  /// Artificial delay applied at the start of every [load] (see the
+  /// factory's [FakeJustAudioPlatform.loadDelay]). Mutable, so a test
+  /// can slow a load down after the player was created.
+  Duration loadDelay;
+
   Duration position = Duration.zero;
   Duration duration = const Duration(seconds: 60);
   bool playing = false;
+
+  /// Substrings of URIs whose load must fail (shared with the
+  /// factory — see [FakeJustAudioPlatform.failLoadSubstrings]).
+  final Set<String> failLoadSubstrings;
 
   /// True once a seek happened since the last load — i.e. this play
   /// is a word play (the ayah scope never seeks). Decides which
@@ -165,14 +192,32 @@ class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
 
   @override
   Future<LoadResponse> load(LoadRequest request) async {
+    if (loadDelay > Duration.zero) {
+      await Future<void>.delayed(loadDelay);
+    }
     loadCount++;
     final message = request.audioSourceMessage;
     if (message is UriAudioSourceMessage) loadUris.add(message.uri);
+    if (message is UriAudioSourceMessage &&
+        failLoadSubstrings.any(message.uri.contains)) {
+      throw PlatformException(
+          code: 'load_failed', message: 'injected failure: ${message.uri}');
+    }
     position = request.initialPosition ?? Duration.zero;
     _seekedSinceLoad = false;
     // Unblock AudioPlayer._load: it waits for a non-loading state.
     _playbackEvents.add(_event(ProcessingStateMessage.ready));
     return LoadResponse(duration: duration);
+  }
+
+  /// Test helper (v13.2, stale-finish race): inject a `completed`
+  /// state event as if the loaded file had just ended — e.g. the
+  /// previous item finishing while the next item is still loading.
+  /// The controller must ignore it (its finish token does not match
+  /// the in-flight load) instead of advancing the new queue.
+  void emitCompleted() {
+    position = duration;
+    _playbackEvents.add(_event(ProcessingStateMessage.completed));
   }
 
   @override
@@ -213,7 +258,14 @@ class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
   @override
   Future<SeekResponse> seek(SeekRequest request) async {
     _cancelTimer();
-    _seekedSinceLoad = true;
+    // A seek to a NONZERO position means "play a word slice" (the
+    // position-jump finish). A seek to zero is just "start from the
+    // beginning" — the file then plays to its real end and finishes
+    // with `completed`, exactly like the real platform: the wbw word
+    // files (v13.2) are loaded then seeked to 0, and their finish
+    // must arrive via `completed` so repeat/replay works for them.
+    _seekedSinceLoad =
+        request.position != null && request.position! > Duration.zero;
     if (request.position != null) position = request.position!;
     _playbackEvents.add(_event(ProcessingStateMessage.ready));
     return SeekResponse();
