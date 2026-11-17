@@ -1,7 +1,12 @@
+import 'dart:async';
+
 import 'package:google_fonts/google_fonts.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:quran/quran.dart' as quran;
 
+import '../data/audio_player_controller.dart';
+import '../data/ayah_marks.dart';
+import '../data/ayah_notes.dart';
 import '../data/qcf_word_map.dart';
 import '../data/surah_sciences.dart';
 import '../data/tafsir_downloads.dart';
@@ -16,9 +21,21 @@ import '../data/word_meanings.dart';
 /// card. The sample images in ~/workspace/your_files/
 /// (sample-word-card-v2, sample-word-tafsir, sample-word-sarf,
 /// sample-word-irab) are the spec.
+///
+/// v13.3 (FIX B): the card is restyled EXACTLY like the SurahApp
+/// popup the user approved (sample-v133-word-popup.png): cream popup,
+/// المعنى pill, the word big in green, the SHORT plain meaning, and
+/// the khaki toolbar استماع / فاصل / تلوين / تعليقات / المزيد.
+/// صرف / إعراب / التفسير moved into المزيد; the "استمع للآية"
+/// button stays (v13.2 UX D). The card also shows the word audio's
+/// own loading state (spinner + honest progress + إلغاء) and its
+/// failure state (plain message + إعادة المحاولة) — the approved
+/// sample-v133-word-loading.png.
 
 const _green = Color(0xFF0D6E52);
 const _cream = Color(0xFFFBF6E9);
+const _khaki = Color(0xFFE7E2CF);
+const _khakiText = Color(0xFF5A5A48);
 
 /// Arabic-Indic digits for counters ("الكلمة ٨ من ٤٦").
 String arabicIndic(int n) {
@@ -126,13 +143,22 @@ enum _WordMode { meaning, sarf, irab }
 /// [onPlayAyah] plays the whole AYAH (v13.2, UX D / best-apps rule
 /// 2): the ayah-listen action must be discoverable from any word
 /// tap — the small ۝ ornament is NOT the only way to hear an ayah.
+/// [audioController] drives the card's own loading / failure states
+/// (v13.3, FIX A/B): while the word file downloads the card shows
+/// the spinner + progress + إلغاء; on failure the plain message +
+/// إعادة المحاولة. [onOpenNotes] opens the ayah sheet's note editor
+/// (تعليقات); [onOpenTafsir] opens the tafsir card (المزيد ←
+/// التفسير).
 Future<void> showWordCard({
   required BuildContext context,
   required int surah,
   required int verse,
   required int wordIndex,
+  required AudioPlayerController audioController,
   required void Function(int wordIndex) onPlayWord,
   required VoidCallback onPlayAyah,
+  required VoidCallback onOpenNotes,
+  required VoidCallback onOpenTafsir,
 }) {
   return showDialog(
     context: context,
@@ -140,8 +166,11 @@ Future<void> showWordCard({
       surah: surah,
       verse: verse,
       wordIndex: wordIndex,
+      audioController: audioController,
       onPlayWord: onPlayWord,
       onPlayAyah: onPlayAyah,
+      onOpenNotes: onOpenNotes,
+      onOpenTafsir: onOpenTafsir,
     ),
   );
 }
@@ -150,16 +179,22 @@ class WordCard extends StatefulWidget {
   final int surah;
   final int verse;
   final int wordIndex;
+  final AudioPlayerController audioController;
   final void Function(int wordIndex) onPlayWord;
   final VoidCallback onPlayAyah;
+  final VoidCallback onOpenNotes;
+  final VoidCallback onOpenTafsir;
 
   const WordCard({
     super.key,
     required this.surah,
     required this.verse,
     required this.wordIndex,
+    required this.audioController,
     required this.onPlayWord,
     required this.onPlayAyah,
+    required this.onOpenNotes,
+    required this.onOpenTafsir,
   });
 
   @override
@@ -173,6 +208,11 @@ class _WordCardState extends State<WordCard> {
   String? _gloss;
   String? _morph;
   bool _loading = true;
+  // SurahApp toolbar state (v13.3, FIX B): is this ayah bookmarked
+  // (فاصل) / coloured (تلوين) / does it have a note (تعليقات)?
+  bool _isBookmarked = false;
+  bool _isHighlighted = false;
+  bool _hasNote = false;
 
   @override
   void initState() {
@@ -192,13 +232,31 @@ class _WordCardState extends State<WordCard> {
     final results = await Future.wait([
       QuranWordData.wordGloss(widget.surah, widget.verse, _lookupText),
       QuranWordData.morphForWord(widget.surah, widget.verse, _lookupText),
+      AyahBookmarks.isBookmarked(widget.surah, widget.verse),
+      AyahHighlights.isHighlighted(widget.surah, widget.verse),
+      AyahNotes.getNote(widget.surah, widget.verse),
     ]);
     if (!mounted) return;
     setState(() {
-      _gloss = results[0];
-      _morph = results[1];
+      _gloss = results[0] as String?;
+      _morph = results[1] as String?;
+      _isBookmarked = results[2] as bool;
+      _isHighlighted = results[3] as bool;
+      _hasNote = (results[4] as String?) != null;
       _loading = false;
     });
+  }
+
+  Future<void> _toggleBookmark() async {
+    final now = await AyahBookmarks.toggle(widget.surah, widget.verse);
+    if (!mounted) return;
+    setState(() => _isBookmarked = now);
+  }
+
+  Future<void> _toggleHighlight() async {
+    final now = await AyahHighlights.toggle(widget.surah, widget.verse);
+    if (!mounted) return;
+    setState(() => _isHighlighted = now);
   }
 
   void _goToWord(int index) {
@@ -224,7 +282,7 @@ class _WordCardState extends State<WordCard> {
     return Dialog(
       insetPadding:
           const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
-      backgroundColor: isDark ? const Color(0xFF1E1F1E) : Colors.white,
+      backgroundColor: isDark ? const Color(0xFF1E1F1E) : _cream,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: ConstrainedBox(
         constraints: BoxConstraints(
@@ -239,8 +297,7 @@ class _WordCardState extends State<WordCard> {
               Row(
                 children: [
                   // The pill shows the current section; tapping it
-                  // returns to المعنى (the toolbar has استمع/صرف/إعراب
-                  // only — there is no other way back to the meaning).
+                  // returns to المعنى (صرف / إعراب live in المزيد).
                   Tooltip(
                     message: 'عرض المعنى',
                     child: InkWell(
@@ -253,16 +310,24 @@ class _WordCardState extends State<WordCard> {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 12, vertical: 4),
                         decoration: BoxDecoration(
-                          border: Border.all(color: _green, width: 1.2),
+                          color: _khaki,
                           borderRadius: BorderRadius.circular(20),
                         ),
-                        child: Text(
-                          _modeLabel,
-                          style: GoogleFonts.amiri(
-                            fontSize: 15,
-                            fontWeight: FontWeight.bold,
-                            color: _green,
-                          ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.keyboard_arrow_down,
+                                size: 16, color: _green),
+                            const SizedBox(width: 2),
+                            Text(
+                              _modeLabel,
+                              style: GoogleFonts.amiri(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                                color: _green,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
@@ -282,7 +347,7 @@ class _WordCardState extends State<WordCard> {
                 _wordText,
                 textAlign: TextAlign.center,
                 style: GoogleFonts.amiri(
-                  fontSize: 32,
+                  fontSize: 40,
                   fontWeight: FontWeight.bold,
                   color: _green,
                 ),
@@ -290,12 +355,10 @@ class _WordCardState extends State<WordCard> {
               const SizedBox(height: 6),
               Flexible(
                 child: SingleChildScrollView(
-                  child: _loading
-                      ? const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 20),
-                          child: Center(child: CircularProgressIndicator()),
-                        )
-                      : _modeBody(),
+                  child: AnimatedBuilder(
+                    animation: widget.audioController,
+                    builder: (context, _) => _audioBody(),
+                  ),
                 ),
               ),
               const SizedBox(height: 10),
@@ -309,6 +372,108 @@ class _WordCardState extends State<WordCard> {
         ),
       ),
     );
+  }
+
+  /// The card body, driven by the word audio's own state (v13.3,
+  /// FIX A/B — the approved sample-v133-word-loading.png):
+  /// while the word file downloads, the spinner + honest progress +
+  /// إلغاء; on failure, the plain message + إعادة المحاولة; otherwise
+  /// the meaning / صرف / إعراب body.
+  Widget _audioBody() {
+    final c = widget.audioController;
+    if (c.scope == PlayerScope.word && c.isLoading) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 12),
+          const SizedBox(
+            width: 28,
+            height: 28,
+            child: CircularProgressIndicator(
+              color: _green,
+              strokeWidth: 2.5,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'جارٍ تحميل الصوت…',
+            style: GoogleFonts.amiri(fontSize: 16, color: Colors.grey),
+          ),
+          if (c.downloadProgress != null) ...[
+            const SizedBox(height: 10),
+            LinearProgressIndicator(
+              value: c.downloadProgress,
+              backgroundColor: Colors.grey.shade300,
+              color: _green,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '${(c.downloadProgress! * 100).round()}٪',
+              style: GoogleFonts.amiri(fontSize: 13, color: Colors.grey),
+            ),
+          ],
+          const SizedBox(height: 8),
+          OutlinedButton(
+            onPressed: () async {
+              await c.stop();
+              if (mounted) Navigator.of(context).pop();
+            },
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: _green),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+            ),
+            child: Text(
+              'إلغاء',
+              style: GoogleFonts.amiri(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: _green),
+            ),
+          ),
+        ],
+      );
+    }
+    if (c.scope == PlayerScope.word && c.lastError != null) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 8),
+          Text(
+            'تعذّر تحميل الصوت',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.amiri(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.red,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'تحقق من الاتصال وحاول مجدداً',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.amiri(fontSize: 15, color: Colors.grey),
+          ),
+          const SizedBox(height: 10),
+          FilledButton(
+            onPressed: () => unawaited(c.retryLastError()),
+            style: FilledButton.styleFrom(backgroundColor: _green),
+            child: Text(
+              'إعادة المحاولة',
+              style: GoogleFonts.amiri(fontSize: 16),
+            ),
+          ),
+        ],
+      );
+    }
+    if (_loading) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 20),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    return _modeBody();
   }
 
   Widget _modeBody() {
@@ -403,41 +568,141 @@ class _WordCardState extends State<WordCard> {
     );
   }
 
+  /// The SurahApp-style toolbar (v13.3, FIX B — the approved
+  /// sample-v133-word-popup.png): one khaki bar, five columns.
+  /// * استماع: plays JUST this word (the wbw file), then closes the
+  ///   card — the mini bar shows below.
+  /// * فاصل: toggles the ayah bookmark (gold tint on the page, listed
+  ///   under الفواصل in ملاحظاتي). Filled icon while bookmarked.
+  /// * تلوين: toggles the ayah colour (green tint on the page).
+  ///   Filled icon while coloured.
+  /// * تعليقات: opens the ayah sheet's note editor. The icon is
+  ///   green while the ayah has a note.
+  /// * المزيد: صرف / إعراب (switch the card's mode) / التفسير (opens
+  ///   the tafsir card).
   Widget _toolbar() {
-    // Loose fit (not Expanded): each button sizes to its content,
-    // so the row fits even in the wide test font — and comfortably
-    // in the real Amiri font on the phone.
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Flexible(child: _toolButton(
-            icon: Icons.volume_up,
+    return Container(
+      decoration: BoxDecoration(
+        color: _khaki,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+      child: Row(
+        children: [
+          _toolbarItem(
+            icon: Icons.play_arrow,
             label: 'استمع',
-            active: false,
+            iconSize: 28,
+            iconColor: _green,
             onPressed: () {
               final index = _wordIndex;
               Navigator.of(context).pop();
               widget.onPlayWord(index);
             },
           ),
-        ),
-        const SizedBox(width: 8),
-        Flexible(
-          child: _toolButton(
-            label: 'صرف',
-            active: _mode == _WordMode.sarf,
-            onPressed: () => setState(() => _mode = _WordMode.sarf),
+          _toolbarItem(
+            icon:
+                _isBookmarked ? Icons.bookmark : Icons.bookmark_border,
+            label: 'فاصل',
+            active: _isBookmarked,
+            onPressed: _toggleBookmark,
+          ),
+          _toolbarItem(
+            icon: Icons.format_paint,
+            label: 'تلوين',
+            active: _isHighlighted,
+            onPressed: _toggleHighlight,
+          ),
+          _toolbarItem(
+            icon: Icons.comment_outlined,
+            label: 'تعليقات',
+            active: _hasNote,
+            onPressed: () {
+              Navigator.of(context).pop();
+              widget.onOpenNotes();
+            },
+          ),
+          Expanded(
+            child: PopupMenuButton<String>(
+              tooltip: 'المزيد',
+              padding: EdgeInsets.zero,
+              onSelected: (value) {
+                switch (value) {
+                  case 'sarf':
+                    setState(() => _mode = _WordMode.sarf);
+                  case 'irab':
+                    setState(() => _mode = _WordMode.irab);
+                  case 'tafsir':
+                    Navigator.of(context).pop();
+                    widget.onOpenTafsir();
+                }
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem<String>(
+                  value: 'sarf',
+                  child: Text('صرف'),
+                ),
+                const PopupMenuItem<String>(
+                  value: 'irab',
+                  child: Text('إعراب'),
+                ),
+                const PopupMenuItem<String>(
+                  value: 'tafsir',
+                  child: Text('التفسير'),
+                ),
+              ],
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.more_horiz,
+                        size: 24, color: _khakiText),
+                    const SizedBox(height: 2),
+                    Text(
+                      'المزيد',
+                      style:
+                          GoogleFonts.amiri(fontSize: 13, color: _khakiText),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _toolbarItem({
+    required IconData icon,
+    required String label,
+    required VoidCallback onPressed,
+    bool active = false,
+    double iconSize = 24,
+    Color? iconColor,
+  }) {
+    final color = iconColor ?? (active ? _green : _khakiText);
+    return Expanded(
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(10),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: iconSize, color: color),
+              const SizedBox(height: 2),
+              Text(
+                label,
+                style: GoogleFonts.amiri(
+                    fontSize: 13, color: active ? _green : _khakiText),
+              ),
+            ],
           ),
         ),
-        const SizedBox(width: 8),
-        Flexible(
-          child: _toolButton(
-            label: 'إعراب',
-            active: _mode == _WordMode.irab,
-            onPressed: () => setState(() => _mode = _WordMode.irab),
-          ),
-        ),
-      ],
+      ),
     );
   }
 
@@ -465,37 +730,6 @@ class _WordCardState extends State<WordCard> {
             borderRadius: BorderRadius.circular(12),
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _toolButton({
-    IconData? icon,
-    required String label,
-    required bool active,
-    required VoidCallback onPressed,
-  }) {
-    return OutlinedButton(
-      onPressed: onPressed,
-      style: OutlinedButton.styleFrom(
-        backgroundColor: active ? _green : null,
-        foregroundColor: active ? Colors.white : _green,
-        side: const BorderSide(color: _green),
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          if (icon != null) ...[
-            Icon(icon, size: 16),
-            const SizedBox(width: 4),
-          ],
-          Text(label, style: GoogleFonts.amiri(fontSize: 15)),
-        ],
       ),
     );
   }

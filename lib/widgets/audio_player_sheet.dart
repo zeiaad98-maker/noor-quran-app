@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:quran/quran.dart' as quran;
@@ -72,13 +74,49 @@ class AudioPlayerSheet extends StatelessWidget {
                 // green background with the white spinner inside
                 // (see _topRow — onPressed is NEVER null, so the
                 // button never renders as a grey disabled circle).
+                // v13.3 (FIX A): while a download is in flight the
+                // user sees HONEST progress (bar + percent) and a
+                // Cancel button — the download has no wall-clock
+                // limit, so the user, not a timer, decides when to
+                // give up. When the server gives no length, the bar
+                // is indeterminate.
                 if (controller.isLoading)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 6),
-                    child: Text(
-                      'جارٍ التحميل…',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 13, color: Colors.grey),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Column(
+                      children: [
+                        const Text(
+                          'جارٍ التحميل…',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 13, color: Colors.grey),
+                        ),
+                        if (controller.downloadProgress != null) ...[
+                          const SizedBox(height: 6),
+                          LinearProgressIndicator(
+                            value: controller.downloadProgress,
+                            backgroundColor: Colors.grey.shade300,
+                            color: _green,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${(controller.downloadProgress! * 100).round()}٪',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                                fontSize: 12, color: Colors.grey),
+                          ),
+                        ],
+                        TextButton(
+                          onPressed: () =>
+                              unawaited(controller.stop()),
+                          child: Text(
+                            'إلغاء',
+                            style: GoogleFonts.amiri(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                                color: _green),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 const SizedBox(height: 8),
@@ -114,7 +152,7 @@ class AudioPlayerSheet extends StatelessWidget {
                       ),
                       child: Row(
                         children: [
-                          const Icon(Icons.signal_wifi_off,
+                          const Icon(Icons.error_outline,
                               size: 20, color: Colors.red),
                           const SizedBox(width: 8),
                           Expanded(
