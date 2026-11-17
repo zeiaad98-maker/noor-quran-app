@@ -130,6 +130,7 @@ void main() {
                   verse: 7,
                   wordIndex: 7,
                   onPlayWord: playedWords.add,
+                  onPlayAyah: () {},
                 ),
                 child: const Text('open'),
               ),
