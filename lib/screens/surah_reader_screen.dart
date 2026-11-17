@@ -46,6 +46,11 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
   // is deliberately narrow (0.92..0.98 — see clampMushafZoom).
   // Default 0.98: the safe maximum, visually identical to 1.0.
   double _pageZoom = 0.98;
+
+  /// Playback highlight toggle (v13.2, bug C / best-apps rule 4):
+  /// colour the playing ayah / word while audio plays. Default on;
+  /// persisted as 'highlight_playback' in _loadSettings.
+  bool _highlightPlayback = true;
   late final AudioPlayerController _audioController;
   // Offline reciter downloads (v12): one instance shared by the
   // player (plays local files when present) and the reciters screen.
@@ -109,6 +114,9 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
     _downloadsService = AudioDownloadService();
     unawaited(_downloadsService.init());
     _audioController = AudioPlayerController(downloads: _downloadsService);
+    // Repeat / speed settings the user chose before (v13.2, bug B):
+    // restored once at startup so a count survives app restarts.
+    unawaited(_audioController.restorePlaybackSettings());
     _tafsirService = TafsirService();
     unawaited(_tafsirService.init());
     // The player sheet and the top-bar play icon rebuild from this.
@@ -192,6 +200,7 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
     setState(() {
       _isBookmarked = prefs.getInt('bookmarked_page') == _currentPage;
       _pageZoom = zoom;
+      _highlightPlayback = prefs.getBool('highlight_playback') ?? true;
       _audioController.setInitialReciterIndex(reciterIndex);
     });
   }
@@ -373,6 +382,37 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                 ],
               ),
               const SizedBox(height: 8),
+              // Playback highlight toggle (v13.2, bug C / best-apps
+              // rule 4): the sheet is not a StatefulBuilder, so the
+              // switch keeps its own local state to flip instantly;
+              // the reader's setState repaints the page highlight.
+              StatefulBuilder(
+                builder: (context, setSwitchState) => SwitchListTile(
+                  title: Text(
+                    'تمييز الآية أثناء الاستماع',
+                    style: GoogleFonts.amiri(
+                      fontSize: 17,
+                      color: isDark ? Colors.white : const Color(0xFF2D2A26),
+                    ),
+                  ),
+                  subtitle: Text(
+                    'تلوين الآية والكلمة أثناء التشغيل',
+                    style: GoogleFonts.amiri(
+                      fontSize: 13,
+                      color: Colors.grey,
+                    ),
+                  ),
+                  value: _highlightPlayback,
+                  activeThumbColor: const Color(0xFF0D6E52),
+                  onChanged: (value) async {
+                    setSwitchState(() {});
+                    setState(() => _highlightPlayback = value);
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setBool('highlight_playback', value);
+                  },
+                ),
+              ),
+              const SizedBox(height: 8),
               Text(
                 'الخط يعمل بدون إنترنت — لا حاجة لتحميل الصفحات',
                 style: GoogleFonts.amiri(
@@ -479,13 +519,16 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
   /// ([_openTafsirCard]) — that is the way to the tafsir / notes /
   /// ayah audio now.
   ///
-  /// استماع in the card plays the single word DIRECTLY and shows the
-  /// compact mini-player bar docked at the bottom of the reader — it
-  /// does NOT open the full player sheet. (The card itself closes on
-  /// استماع, so the docked bar is visible: a Dialog is modal and the
-  /// bar sits behind it.) The reader's own audio button and the ayah
-  /// sheet still open the full sheet.
+  /// v13.2 (best-apps rule 1): tapping a word plays JUST the word
+  /// immediately — the wbw file, never the ayah — and shows the
+  /// compact mini-player bar docked at the bottom of the reader; it
+  /// does NOT open the full player sheet. The card itself opens too
+  /// (meaning + صرف/إعراب), and its "استمع للآية" button is the
+  /// visible ayah-listen control (UX D). The reader's own audio
+  /// button and the ayah sheet still open the full sheet.
   void _openWordCard(int surah, int verse, int wordIndex) {
+    unawaited(_audioController.playWord(surah, verse, wordIndex + 1));
+    if (mounted) setState(() => _showMiniBar = true);
     showWordCard(
       context: context,
       surah: surah,
@@ -495,7 +538,20 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
         unawaited(_audioController.playWord(surah, verse, word + 1));
         if (mounted) setState(() => _showMiniBar = true);
       },
+      onPlayAyah: () {
+        unawaited(_audioController.playAyah(surah, verse));
+        if (mounted) setState(() => _showMiniBar = true);
+      },
     );
+  }
+
+  /// Long-press a word plays its whole AYAH (v13.2, UX D /
+  /// best-apps rule 2): the second, distinct gesture for ayah audio
+  /// — tap is the word, long-press is the ayah (rule 6). Shows the
+  /// mini bar; the full sheet is one tap away on the bar.
+  void _onWordLongPress(int surah, int verse, int wordIndex) {
+    unawaited(_audioController.playAyah(surah, verse));
+    if (mounted) setState(() => _showMiniBar = true);
   }
 
   /// Tafsir card (v12): opened by tapping the verse-end number glyph
@@ -675,6 +731,27 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                                       _openTafsirCard(surah, verse),
                                   onWordTap: (surah, verse, wordIndex) =>
                                       _openWordCard(surah, verse, wordIndex),
+                                  onWordLongPress: (surah, verse, wordIndex) =>
+                                      _onWordLongPress(
+                                          surah, verse, wordIndex),
+                                  // Playback highlight (v13.2, bug C):
+                                  // only while really playing and the
+                                  // toggle is on; word scope colours
+                                  // the word (0-based), other scopes
+                                  // tint the whole ayah.
+                                  playingActive: _highlightPlayback &&
+                                      _audioController.isPlaying,
+                                  playingSurah:
+                                      _audioController.currentAyah?.$1,
+                                  playingVerse:
+                                      _audioController.currentAyah?.$2,
+                                  playingWordIndex:
+                                      _audioController.scope ==
+                                              PlayerScope.word
+                                          ? (_audioController.wordIndex ??
+                                                  1) -
+                                              1
+                                          : null,
                                 ),
                               );
                             },
