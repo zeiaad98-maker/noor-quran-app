@@ -553,9 +553,10 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
   /// word map; the audio controller takes a 1-based word position,
   /// so the play callback adds 1.
   ///
-  /// Tapping the verse-end number glyph opens the TAFSIR card
-  /// ([_openTafsirCard]) — that is the way to the tafsir / notes /
-  /// ayah audio now.
+  /// Tapping the verse-end number glyph opens the AYAH SHEET
+  /// ([_openAyahSheet]) — play ayah, word chips, notes (v13.5:
+  /// the world apps show the ayah sheet for an ayah tap; the
+  /// tafsir card moved to the word card's التفسير button).
   ///
   /// v13.2 (best-apps rule 1): tapping a word plays JUST the word
   /// immediately — the wbw file, never the ayah — and shows the
@@ -597,8 +598,9 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
     if (mounted) setState(() => _showMiniBar = true);
   }
 
-  /// Tafsir card (v12): opened by tapping the verse-end number glyph
-  /// ۝. Ayah in a cream box + the selected tafsir (selector pill
+  /// Tafsir card (v12): opened from the word card's التفسير button
+  /// (v13.5: the verse-end number glyph ۝ opens the ayah sheet now).
+  /// Ayah in a cream box + the selected tafsir (selector pill
   /// switches between the six) + أسباب النزول when the ayah has an
   /// entry. استمع للآية opens the full player; ملاحظاتي opens the
   /// old ayah sheet (notes / word chips / ayah audio).
@@ -767,7 +769,7 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                                   theme: qcfTheme,
                                   onPageChanged: _onPageChanged,
                                   onTap: (surah, verse) =>
-                                      _openTafsirCard(surah, verse),
+                                      _openAyahSheet(surah, verse),
                                   onWordTap: (surah, verse, wordIndex) =>
                                       _openWordCard(surah, verse, wordIndex),
                                   onWordLongPress: (surah, verse, wordIndex) =>
