@@ -15,6 +15,7 @@ import 'package:noor_quran/data/quran_audio.dart';
 import 'package:noor_quran/screens/adhkar_tasbeeh_screen.dart';
 
 import 'fake_just_audio.dart';
+import 'zip_fixture.dart';
 
 /// v13.3 — the four fixes, pinned:
 ///
@@ -101,8 +102,12 @@ void main() {
       // so no stall fires — and there is no wall-clock timeout to
       // kill it. (The old code's 15 s per-attempt timeout is gone.)
       AudioDownloadService.stallTimeout = const Duration(seconds: 1);
+      final bytes = List<int>.generate(1000, (i) => i % 256);
+      final zipBytes =
+          buildSurahZip({'002033.mp3': bytes}, stored: true);
       final client = _FakeSlowClient(
-        bytes: List<int>.generate(1000, (i) => i % 256),
+        bytes: bytes,
+        zipBytes: zipBytes,
         chunkGap: const Duration(milliseconds: 250),
       );
       await buildService(client);
@@ -115,7 +120,9 @@ void main() {
       );
       expect(file, isNotNull);
       expect(await file!.length(), 1000);
-      expect(progress.last, (1000, 1000));
+      // Progress runs over the ZIP download (one download, so it is
+      // monotonic and ends at the ZIP's own total, not the entry's).
+      expect(progress.last, (zipBytes.length, zipBytes.length));
       // Progress really moved (not one jump at the end).
       expect(progress.map((p) => p.$1).toSet().length, greaterThan(5));
       for (var i = 1; i < progress.length; i++) {
@@ -141,8 +148,10 @@ void main() {
     test('an interrupted download resumes from the partial file',
         () async {
       AudioDownloadService.retryBackoff = const Duration(milliseconds: 10);
+      final bytes = List<int>.generate(1000, (i) => i % 256);
       final client = _FakeSlowClient(
-        bytes: List<int>.generate(1000, (i) => i % 256),
+        bytes: bytes,
+        zipBytes: buildSurahZip({'002033.mp3': bytes}, stored: true),
         // First attempt sends only the first half, then closes
         // early (size != total → failure, tmp kept for resume).
         cutAfterFraction: 0.5,
@@ -160,8 +169,10 @@ void main() {
     test('a 500 on the first attempt is retried and then succeeds',
         () async {
       AudioDownloadService.retryBackoff = const Duration(milliseconds: 10);
+      final bytes = List<int>.generate(400, (i) => i % 256);
       final client = _FakeSlowClient(
-        bytes: List<int>.generate(400, (i) => i % 256),
+        bytes: bytes,
+        zipBytes: buildSurahZip({'002033.mp3': bytes}, stored: true),
         failAttempts: 1,
       );
       await buildService(client);
@@ -202,8 +213,10 @@ void main() {
     });
 
     test('a cached file is reused — no second download', () async {
+      final bytes = List<int>.generate(200, (i) => i % 256);
       final client = _FakeSlowClient(
-        bytes: List<int>.generate(200, (i) => i % 256),
+        bytes: bytes,
+        zipBytes: buildSurahZip({'002033.mp3': bytes}, stored: true),
       );
       await buildService(client);
       final first = await service.cacheAyahFile(reciters[0], 2, 33);
@@ -389,6 +402,11 @@ bool _isWordPartPadding(int c) => c == 0x00A0 || c == 0x0A || c == 0x0D;
 /// honoured with a 206 + the remaining bytes.
 class _FakeSlowClient extends http.BaseClient {
   final List<int> bytes;
+
+  /// Full per-surah ZIP bytes, served for ZIP URLs only (v13.5:
+  /// cacheAyahFile tries the ZIP first, then the per-ayah file).
+  /// When null, [bytes] is served for every URL (the old behaviour).
+  final List<int>? zipBytes;
   final Duration chunkGap;
   final int failAttempts;
   final bool stall;
@@ -400,6 +418,7 @@ class _FakeSlowClient extends http.BaseClient {
 
   _FakeSlowClient({
     required this.bytes,
+    this.zipBytes,
     this.chunkGap = Duration.zero,
     this.failAttempts = 0,
     this.stall = false,
@@ -413,6 +432,13 @@ class _FakeSlowClient extends http.BaseClient {
     if (attempts <= failAttempts) {
       return http.StreamedResponse(const Stream.empty(), 500);
     }
+    // v13.5: the ZIP URL gets the real ZIP bytes (so the ZIP path
+    // succeeds and the per-ayah fallback is never reached); any
+    // other URL gets the raw per-ayah bytes.
+    final serveBytes = (zipBytes != null &&
+            request.url.toString().contains('/zips/'))
+        ? zipBytes!
+        : bytes;
     final range = request.headers['Range'];
     var start = 0;
     var status = 200;
@@ -424,7 +450,7 @@ class _FakeSlowClient extends http.BaseClient {
         sawRange = true;
       }
     }
-    final remaining = bytes.sublist(start);
+    final remaining = serveBytes.sublist(start);
     if (stall) {
       // A stream that never emits and never closes: the stall
       // timer must fire. (Stream has no .never() constructor.)
