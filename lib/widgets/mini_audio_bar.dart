@@ -6,16 +6,17 @@ import '../data/audio_player_controller.dart';
 /// screen (overlaying the page, NOT a modal sheet).
 ///
 /// Layout (reference screenshot): ••• | repeat | prev | play/pause ▶ |
-/// next | X. While a word is loading the play button keeps its green
+/// replay | next | X. While a word is loading the play button keeps its green
 /// background with a white spinner inside (never a grey disabled
 /// circle) and a small "جارٍ تحميل الكلمة…" label appears above the
 /// row.
 ///
 /// Wiring — all to the existing [AudioPlayerController]:
 /// play/pause → togglePlayPause, prev/next → previous/next,
-/// repeat → toggleRepeatItem, X → [onClose] (the reader stops the
-/// audio and hides the bar). The ••• menu holds repeat-count and
-/// speed, same as the full sheet's more menu.
+/// repeat → toggleRepeatItem, replay → replayCurrent (restarts the
+/// current word at once, whether playing or finished), X → [onClose]
+/// (the reader stops the audio and hides the bar). The ••• menu holds
+/// repeat-count and speed, same as the full sheet's more menu.
 class MiniAudioBar extends StatelessWidget {
   final AudioPlayerController controller;
   final VoidCallback onClose;
@@ -114,6 +115,11 @@ class MiniAudioBar extends StatelessWidget {
                               size: 30,
                             ),
                     ),
+                  ),
+                  IconButton(
+                    tooltip: 'إعادة الكلمة',
+                    icon: const Icon(Icons.replay, color: _green),
+                    onPressed: controller.replayCurrent,
                   ),
                   IconButton(
                     tooltip: 'التالي',

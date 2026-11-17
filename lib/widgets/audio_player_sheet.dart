@@ -93,6 +93,21 @@ class AudioPlayerSheet extends StatelessWidget {
                       style: GoogleFonts.amiri(fontSize: 12, color: Colors.grey),
                     ),
                   ),
+                // v13.1: when the selected reciter has no word
+                // segments, the word plays in محمود الحصري's voice
+                // (his own real recording, cached on play) — say so
+                // plainly, never as the selected reciter's voice.
+                if (controller.scope == PlayerScope.word &&
+                    !controller.wordUsesWbw &&
+                    controller.wordUsesHusaryFallback)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      'الكلمة بصوت محمود الحصري — القارئ المختار ليس له مقاطع كلمة-بكلمة خاصة به',
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.amiri(fontSize: 12, color: Colors.grey),
+                    ),
+                  ),
                 // Playback errors surface HERE, inside the sheet: the
                 // old SnackBar-only error sat behind this modal sheet,
                 // so a failed word tap looked like nothing happening.
