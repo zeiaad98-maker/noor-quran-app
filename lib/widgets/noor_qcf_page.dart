@@ -127,6 +127,29 @@ class NoorQcfPage extends StatelessWidget {
   final void Function(int surahNumber, int verseNumber, int wordIndex)?
       onWordTap;
 
+  /// Callback when a single WORD is long-pressed: plays the whole
+  /// AYAH (v13.2, UX D / best-apps rule 2 — the ayah-listen action
+  /// must be discoverable without the small ۝ ornament). Long-press
+  /// and tap are separate gestures on the same word (rule 6): tap
+  /// plays just the word, long-press plays its ayah. Implemented as
+  /// an outer span recognizer around the word's tap span — the
+  /// gesture arena gives the tap to a quick release and the
+  /// long-press to a hold, so they never conflict.
+  final void Function(int surahNumber, int verseNumber, int wordIndex)?
+      onWordLongPress;
+
+  /// Playback highlight (v13.2, bug C / best-apps rule 4): the ayah
+  /// and word currently playing. The page colours the playing ayah
+  /// (background tint) and the playing word (stronger tint + word
+  /// colour) ONLY while [playingActive] is true — cleared on stop /
+  /// pause / scope change. [playingWordIndex] is the 0-based QCF
+  /// word index for word scope, null for ayah scope (whole ayah).
+  /// All three default to "nothing playing".
+  final int? playingSurah;
+  final int? playingVerse;
+  final int? playingWordIndex;
+  final bool playingActive;
+
   /// Optional callback to customize verse background color dynamically.
   final Color? Function(int surahNumber, int verseNumber)? verseBackgroundColor;
 
@@ -143,6 +166,11 @@ class NoorQcfPage extends StatelessWidget {
     this.onLongPressDown,
     this.onTap,
     this.onWordTap,
+    this.onWordLongPress,
+    this.playingSurah,
+    this.playingVerse,
+    this.playingWordIndex,
+    this.playingActive = false,
     this.verseBackgroundColor,
   });
 
@@ -256,6 +284,17 @@ class NoorQcfPage extends StatelessWidget {
           return null;
         }
 
+        /// Long-press recognizer for the word's ayah (v13.2, UX D):
+        /// wraps the word's tap span in an outer span, so the
+        /// gesture arena gives a quick tap to [wordRecognizer] and a
+        /// hold to this one. Null when the reader did not wire it.
+        GestureRecognizer? wordLongPressRecognizer(int wordIndex) {
+          if (onWordLongPress == null) return null;
+          return LongPressGestureRecognizer()
+            ..onLongPress =
+                () => onWordLongPress?.call(surah, v, wordIndex);
+        }
+
         GestureRecognizer? numberRecognizer() {
           if (onTap != null) {
             return TapGestureRecognizer()..onTap = () => onTap?.call(surah, v);
@@ -345,12 +384,37 @@ class NoorQcfPage extends StatelessWidget {
             glyphOrdinal++;
             i++;
           }
+          // Playback highlight (v13.2, bug C): the playing ayah gets
+          // a background tint, the playing word a stronger tint +
+          // word colour (Quran Majeed: yellow). Only while the audio
+          // is really playing — cleared on stop/pause (playingActive
+          // false). The tint wins over the notes background while
+          // the ayah plays; the notes colour returns after.
+          final isPlayingAyah = playingActive &&
+              playingSurah == surah &&
+              playingVerse == v;
+          final isPlayingWord = isPlayingAyah &&
+              playingWordIndex != null &&
+              playingWordIndex == wordIndex;
+          TextStyle? wordStyle = verseBgStyle;
+          if (isPlayingAyah) {
+            wordStyle = (verseBgStyle ?? const TextStyle()).copyWith(
+              backgroundColor: isPlayingWord
+                  ? const Color(0xFFFFD54D).withValues(alpha: 0.75)
+                  : const Color(0xFFFFE082).withValues(alpha: 0.45),
+              color: isPlayingWord ? const Color(0xFF7A4A00) : null,
+            );
+          }
+          final wordSpan = TextSpan(
+            text: buf.toString(),
+            recognizer: wordRecognizer(wordIndex),
+            style: wordStyle,
+          );
+          final longPress = wordLongPressRecognizer(wordIndex);
           verseSpans.add(
-            TextSpan(
-              text: buf.toString(),
-              recognizer: wordRecognizer(wordIndex),
-              style: verseBgStyle,
-            ),
+            longPress == null
+                ? wordSpan
+                : TextSpan(recognizer: longPress, children: [wordSpan]),
           );
         }
         verseSpans.add(verseNumberSpan);
@@ -467,6 +531,19 @@ class NoorQuranPageView extends StatefulWidget {
   final void Function(int surahNumber, int verseNumber, int wordIndex)?
       onWordTap;
 
+  /// Callback when a single WORD is long-pressed (plays its ayah).
+  /// Passed through to [NoorQcfPage.onWordLongPress].
+  final void Function(int surahNumber, int verseNumber, int wordIndex)?
+      onWordLongPress;
+
+  /// Playback highlight (v13.2, bug C). Passed through to
+  /// [NoorQcfPage]: the playing ayah / word, shown only while
+  /// [playingActive] is true.
+  final int? playingSurah;
+  final int? playingVerse;
+  final int? playingWordIndex;
+  final bool playingActive;
+
   /// Custom scroll physics for the PageView.
   final ScrollPhysics? physics;
 
@@ -482,6 +559,11 @@ class NoorQuranPageView extends StatefulWidget {
     this.verseBackgroundColor,
     this.onTap,
     this.onWordTap,
+    this.onWordLongPress,
+    this.playingSurah,
+    this.playingVerse,
+    this.playingWordIndex,
+    this.playingActive = false,
     this.physics,
   }) : assert(initialPageNumber >= 1 && initialPageNumber <= totalPagesCount);
 
@@ -536,6 +618,11 @@ class _NoorQuranPageViewState extends State<NoorQuranPageView> {
               verseBackgroundColor: widget.verseBackgroundColor,
               onTap: widget.onTap,
               onWordTap: widget.onWordTap,
+              onWordLongPress: widget.onWordLongPress,
+              playingSurah: widget.playingSurah,
+              playingVerse: widget.playingVerse,
+              playingWordIndex: widget.playingWordIndex,
+              playingActive: widget.playingActive,
               sp: widget.sp,
               h: widget.h,
               theme: effectiveTheme,
