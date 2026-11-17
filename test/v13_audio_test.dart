@@ -6,112 +6,25 @@ import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:noor_quran/data/audio_downloads.dart';
-import 'package:noor_quran/data/audio_player_controller.dart';
 import 'package:noor_quran/data/quran_audio.dart';
 import 'package:noor_quran/widgets/noor_qcf_page.dart';
 
 /// v13 audio (the user's top priority): pronunciation must be clear,
 /// pure and complete — for the WORD and the AYAH.
 ///
-/// * Segments: Quran.com returns STRING numbers for some recitations
-///   (Sudais, verified live 2026-11-17) — the parser must coerce them
-///   instead of throwing and silently falling back to the wbw voice.
-/// * Word window: the last word of an ayah gets a longer end padding
-///   (its decay runs past the segment end; verified on Husary 2:33).
 /// * Default reciter: خليفة الطنيجي, with migration of the old
 ///   default (0 = الحصري).
 /// * Cache-on-play: ayah and wbw files are downloaded once and played
 ///   from disk after that — no streaming stutter on a weak connection.
 /// * Zoom: the Mushaf caps at 0.98 (see noor_qcf_page).
+///
+/// NOTE (v13.2): the segment subsystem (parseWordSegments,
+/// paddedWordWindow) was DELETED — the word plays ONLY its wbw file,
+/// never a cut from an ayah recording. The segment groups that lived
+/// here are gone with it; the wbw tests are in v132_audio_test.dart.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  group('parseWordSegments', () {
-    test('string numbers (Sudais 2:33, real API shape) parse correctly', () {
-      final segments = parseWordSegments({
-        'audio': {
-          'segments': [
-            ['0', '1', '50', '570'],
-            ['1', '2', '580', '1200'],
-            ['2', '3', '1210', '2400'],
-          ],
-        },
-      });
-      expect(segments, isNotNull);
-      expect(segments!.length, 3);
-      expect(segments.first.startMs, 50);
-      expect(segments.first.endMs, 570);
-      expect(segments.last.startMs, 1210);
-      expect(segments.last.endMs, 2400);
-    });
-
-    test('int numbers (Husary 2:33, real API shape) still parse', () {
-      final segments = parseWordSegments({
-        'audio': {
-          'segments': [
-            [0, 1, 850, 1760],
-            [1, 2, 1770, 5010],
-          ],
-        },
-      });
-      expect(segments, isNotNull);
-      expect(segments!.length, 2);
-      expect(segments.first.startMs, 850);
-      expect(segments.last.endMs, 5010);
-    });
-
-    test(
-        'a malformed entry never crashes: it is skipped, the list '
-        'stays contiguous from word 0', () {
-      final segments = parseWordSegments({
-        'audio': {
-          'segments': [
-            [0, 1, 850, 1760],
-            ['x', 'y', 'z', 'w'],
-          ],
-        },
-      });
-      // The bad entry is skipped; the remaining list is contiguous
-      // from word 0, so word 1 still plays in the reciter's voice
-      // and later words fall back to wbw (guarded by the length
-      // check in the controller).
-      expect(segments, isNotNull);
-      expect(segments!.length, 1);
-      expect(segments.first.startMs, 850);
-    });
-
-    test('a malformed FIRST entry degrades to null (wbw fallback)', () {
-      final segments = parseWordSegments({
-        'audio': {
-          'segments': [
-            ['x', 'y', 'z', 'w'],
-            [1, 2, 1770, 5010],
-          ],
-        },
-      });
-      // Index 0 is missing, so the list is not contiguous from 0.
-      expect(segments, isNull);
-    });
-  });
-
-  group('paddedWordWindow', () {
-    test('last word of an ayah gets the longer end padding', () {
-      final (seekTo, end) = AudioPlayerController.paddedWordWindow(
-        const WordSegment(44650, 47580),
-        isLastWord: true,
-      );
-      expect(seekTo, const Duration(milliseconds: 44530));
-      expect(end, const Duration(milliseconds: 47980));
-    });
-
-    test('a middle word keeps the 150 ms end padding', () {
-      final (seekTo, end) = AudioPlayerController.paddedWordWindow(
-        const WordSegment(850, 1760),
-      );
-      expect(seekTo, const Duration(milliseconds: 730));
-      expect(end, const Duration(milliseconds: 1910));
-    });
-  });
 
   group('resolveDefaultReciterIndex', () {
     test('absent or old default migrates to الطنيجي (12)', () {
@@ -221,7 +134,7 @@ void main() {
       expect(first, isNotNull);
       expect(await first!.readAsBytes(), [1, 2, 3]);
       expect(requested, [
-        'https://verses.quran.com/wbw/002_033_004.mp3',
+        'https://audio.qurancdn.com/wbw/002_033_004.mp3',
       ]);
       expect(service.localWbwFile(2, 33, 4)?.path, first.path);
 
