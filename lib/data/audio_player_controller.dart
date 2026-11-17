@@ -7,6 +7,7 @@ import 'package:quran/quran.dart' as quran;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'audio_downloads.dart';
+import 'qcf_word_map.dart';
 import 'quran_audio.dart';
 import 'word_meanings.dart';
 
@@ -20,13 +21,14 @@ enum PlayerScope { word, ayah, page, surah }
 /// stay under our control. The old whole-surah mp3quran file is gone:
 /// the surah scope is the surah's ayah files in sequence.
 ///
-/// Word scope: when the word-voice reciter (the selected reciter if
-/// Quran.com carries it, otherwise محمود الحصري — see
-/// [wordVoiceReciterIndex]) has a Quran.com recitation, the word is
-/// played from that reciter's own ayah recording using Quran.com's
-/// per-word timestamps (seek to the word start, stop at its end).
-/// Only if that fails too does the word come from Quran.com's
-/// word-by-word recording (one fixed voice) — never silently missing.
+/// Word scope (v13.2): the word plays ONLY from Quran.com's dedicated
+/// per-word recording (wbw — one fixed teaching voice, complete and
+/// clear by construction). There is NO other word-audio path: the
+/// v13/v13.1 segment path (cutting the word out of an ayah file) is
+/// gone — whenever its seek failed, a tap on a word played the whole
+/// ayah, which was the user's #1 complaint. If the wbw file cannot be
+/// fetched, the sheet shows the error with a retry; it never falls
+/// back to an ayah file.
 class AudioPlayerController extends ChangeNotifier {
   final AudioPlayer _player = AudioPlayer();
 
@@ -54,18 +56,8 @@ class AudioPlayerController extends ChangeNotifier {
   int toPage = 1;
 
   // Word scope state.
-  int? wordIndex; // 1-based position inside the ayah.
-  List<WordSegment>? wordSegments;
+  int? wordIndex; // 1-based QCF position inside the ayah (display words).
   bool wordUsesWbw = false;
-
-  /// v13.1: true when the word is playing in محمود الحصري's voice
-  /// because the selected reciter has no Quran.com word segments
-  /// (الطنيجي + 5 others) — shown honestly in the player sheet, so
-  /// the user is never told the word is in the selected reciter's
-  /// voice when it is Husary's. False when the word plays in the
-  /// selected reciter's own voice, and false when it fell back to
-  /// the wbw recording ([wordUsesWbw] covers that case).
-  bool wordUsesHusaryFallback = false;
   int wordCount = 0;
 
   /// Fired when the playing ayah changes, so the reader can follow
@@ -90,24 +82,22 @@ class AudioPlayerController extends ChangeNotifier {
 
   int _itemPlays = 0;
   int _scopePlays = 0;
-  Duration? _wordEnd;
-  bool _wordEndHandled = false;
-
-  /// True only once the current word has actually started playing.
-  /// The position stream can replay the PREVIOUS play's position
-  /// during the next play's load (just_audio re-emits the last
-  /// playback event while activating) — that stale position is
-  /// already past the new word's end, so an unguarded listener
-  /// fires on it, marks the word handled, and the new play's own
-  /// finish then never fires (the word gets stuck after one
-  /// repeat — verified in tests, v13.1). The listener stays
-  /// disarmed until this word's file really plays.
-  bool _wordArmed = false;
   int _playToken = 0;
   // The _playToken value whose finish was already handled: the word
   // end (position listener) and the file end (state stream) can both
   // fire for the same item — the second must be ignored.
   int _finishedToken = -1;
+
+  /// The token of the play whose audio actually STARTED (load + play
+  /// succeeded). A finish (the `completed` state) is only honoured
+  /// for that play: without this, a STALE finish — the previous
+  /// item's file completing while the next item is still downloading
+  /// on a weak connection — advances the NEW queue or stops the NEW
+  /// load (v13.2 bugs 1+2: wrong ayah playing, spinner stuck). The
+  /// token is set at each successful play start and cleared
+  /// (`-1`) whenever a new play begins or playback stops, so a
+  /// finish can never act on a play that has not started yet.
+  int _finishToken = -1;
 
   /// True while one finish is being handled (a replay / advance /
   /// stop is in flight). The two listeners can fire for the same
@@ -122,41 +112,24 @@ class AudioPlayerController extends ChangeNotifier {
   /// the next item has started (or failed to) or playback stopped.
   bool _handlingFinish = false;
 
-  /// Word-playback padding (v12 precision fix — the user's explicit
-  /// requirement: a tapped word must play EXACTLY and COMPLETELY).
-  /// The seek lands this far BEFORE the segment start so the first
-  /// letter is never cut by seek inaccuracy, and playback runs this
-  /// far PAST the segment end so the last letter finishes. Small
-  /// enough (120/150 ms) not to swallow a neighbouring word: Quran.com
-  /// segments leave a gap between words, and the padded end still
-  /// stops well before the next word starts in normal recitation.
-  static const int wordPadStartMs = 120;
-  static const int wordPadEndMs = 150;
+  /// Repeat settings are persisted (SharedPreferences) and restored
+  /// by [restorePlaybackSettings]: the count must survive leaving
+  /// the reader and restarting the app (v13.2 bug B — the count
+  /// reset to the default every time the screen was recreated).
+  static const String _repeatItemKey = 'audio_repeat_item';
+  static const String _repeatScopeKey = 'audio_repeat_scope';
+  static const String _repeatCountKey = 'audio_repeat_count';
+  static const String _speedKey = 'audio_speed';
 
-  /// Extra end padding for the LAST word of an ayah (v13): there is
-  /// no next word to swallow, and the final word's decay runs past
-  /// its segment end (verified on Husary 2:33: the last word's sound
-  /// ends ~90 ms after the padded end, i.e. its tail was cut). 400 ms
-  /// covers the decay with margin; the file's trailing silence
-  /// absorbs the rest, and the file-completed state ends playback
-  /// if the window ever runs past the file.
-  static const int wordPadEndLastWordMs = 400;
-
-  /// Padded playback window for one word segment: (seekTo, end).
-  /// The start is clamped at zero (the first word of an ayah).
-  /// The last word of an ayah gets the longer end padding (there is
-  /// no next word after it). Pure, so it is pinned by unit tests.
-  static (Duration, Duration) paddedWordWindow(
-    WordSegment seg, {
-    bool isLastWord = false,
-  }) {
-    final startMs = seg.startMs - wordPadStartMs;
-    final endMs =
-        seg.endMs + (isLastWord ? wordPadEndLastWordMs : wordPadEndMs);
-    return (
-      Duration(milliseconds: startMs < 0 ? 0 : startMs),
-      Duration(milliseconds: endMs),
-    );
+  /// Plays remaining for the CURRENT item while [repeatItem] is on,
+  /// counting the play in progress (so "3" at the start of play 1,
+  /// "2" during play 2). -1 when repeat is off or endless (count 0).
+  /// The sheet and the mini bar show it while repeating, so the user
+  /// can see the repeat working and when it will stop (v13.2 bug B).
+  int get repeatRemaining {
+    if (!repeatItem || repeatCount == 0) return -1;
+    final left = repeatCount - _itemPlays + 1;
+    return left < 0 ? 0 : left;
   }
 
   bool _disposed = false;
@@ -166,6 +139,10 @@ class AudioPlayerController extends ChangeNotifier {
   Reciter get reciter => reciters[reciterIndex];
 
   AudioPlayerController({this.downloads}) {
+    // The ONLY finish signal: the file's `completed` state. (The
+    // v12/v13.1 position listener that stopped a word at its segment
+    // end is gone with the segment path — a wbw word file IS the
+    // word, it plays to its own completion.)
     _player.playerStateStream.listen((state) {
       if (_disposed) return;
       final playing = state.playing;
@@ -177,28 +154,27 @@ class AudioPlayerController extends ChangeNotifier {
         _onItemFinished();
       }
     });
-    _player.positionStream.listen((position) async {
-      if (_disposed ||
-          _wordEnd == null ||
-          !_wordArmed ||
-          _wordEndHandled) {
-        return;
-      }
-      if (position >= _wordEnd!) {
-        _wordEndHandled = true;
-        // Await the pause BEFORE finishing: the pause's platform
-        // call must land before the replay's play(), otherwise the
-        // stale pause resumes after the replay started and pauses
-        // the NEW play instead (and cancels its finish in tests,
-        // where every step is microtask-fast — on a device the
-        // replay's load is slower, but awaiting is correct there
-        // too). A failed pause must not lose the finish.
-        try {
-          await _player.pause();
-        } catch (_) {}
-        _onItemFinished();
-      }
-    });
+  }
+
+  /// Restores the persisted repeat / speed settings (called once by
+  /// the reader after creating the controller). The reciter has its
+  /// own restore ([setInitialReciterIndex]).
+  Future<void> restorePlaybackSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (_disposed) return;
+    repeatItem = prefs.getBool(_repeatItemKey) ?? false;
+    repeatScope = prefs.getBool(_repeatScopeKey) ?? false;
+    repeatCount = prefs.getInt(_repeatCountKey) ?? 3;
+    speed = prefs.getDouble(_speedKey) ?? 1.0;
+    notifyListeners();
+  }
+
+  Future<void> _persistPlaybackSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_repeatItemKey, repeatItem);
+    await prefs.setBool(_repeatScopeKey, repeatScope);
+    await prefs.setInt(_repeatCountKey, repeatCount);
+    await prefs.setDouble(_speedKey, speed);
   }
 
   /// Sets the reciter without playing or persisting (initial restore).
@@ -213,12 +189,6 @@ class AudioPlayerController extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('reciter_index', index);
     notifyListeners();
-    // Word segments belong to the WORD-voice reciter, which follows
-    // the selected reciter (own voice, or Husary fallback) — a stale
-    // list from the previous reciter would time the new reciter's
-    // file with the old reciter's timestamps. Drop it; the word
-    // path re-resolves it for the new reciter.
-    if (scope == PlayerScope.word) wordSegments = null;
     // Rebuild the current item with the new reciter's folder and
     // resume from the same ayah / word, not from the start.
     if (queue.isNotEmpty) {
@@ -240,34 +210,45 @@ class AudioPlayerController extends ChangeNotifier {
 
   void setRepeatCount(int count) {
     repeatCount = count;
+    // Picking a count IS asking to repeat (v13.2 bug B): the count
+    // menu used to set the number while the repeat toggle stayed
+    // off, so "3 مرات" did nothing at all. Count 1 = play once =
+    // repeat off; any other count turns repeat-item on.
+    repeatItem = count != 1;
     notifyListeners();
+    unawaited(_persistPlaybackSettings());
   }
 
   void toggleRepeatItem() {
     repeatItem = !repeatItem;
     notifyListeners();
+    unawaited(_persistPlaybackSettings());
   }
 
   void toggleRepeatScope() {
     repeatScope = !repeatScope;
     notifyListeners();
+    unawaited(_persistPlaybackSettings());
   }
 
   Future<void> setSpeed(double value) async {
     speed = value;
     await _player.setSpeed(value);
     notifyListeners();
+    unawaited(_persistPlaybackSettings());
   }
 
+  /// [word] is the 1-based QCF position (the index the reader
+  /// reports for the tapped glyph). The audio position is derived
+  /// from it ([audioPositionForQcfWord]) — in the 4 merged ayahs
+  /// the QCF and audio numberings differ (2:181, 8:6, 13:37, 37:130).
   Future<void> playWord(int surah, int ayah, int word) async {
     scope = PlayerScope.word;
     queue = [(surah, ayah)];
     queueIndex = 0;
     wordIndex = word;
-    wordSegments = null;
     wordUsesWbw = false;
-    wordUsesHusaryFallback = false;
-    wordCount = await _verseWordCount(surah, ayah);
+    wordCount = _qcfWordCount(surah, ayah);
     _scopePlays = 1;
     await _playCurrent();
   }
@@ -325,6 +306,7 @@ class AudioPlayerController extends ChangeNotifier {
   }
 
   Future<void> next() async {
+    _cancelRepeat();
     if (scope == PlayerScope.word) {
       await _nextWord();
       return;
@@ -338,6 +320,7 @@ class AudioPlayerController extends ChangeNotifier {
   }
 
   Future<void> previous() async {
+    _cancelRepeat();
     if (scope == PlayerScope.word) {
       await _previousWord();
       return;
@@ -355,17 +338,37 @@ class AudioPlayerController extends ChangeNotifier {
     }
   }
 
+  /// A manual tap (next / prev / stop / close) cancels repeat
+  /// immediately (v13.2 bug B / best-apps rule 3): the user asked
+  /// for something else, so the repeat must not carry over to the
+  /// next item. Automatic advance (queue end / repeat itself) never
+  /// calls this.
+  void _cancelRepeat() {
+    if (repeatItem || repeatScope) {
+      repeatItem = false;
+      repeatScope = false;
+      notifyListeners();
+      unawaited(_persistPlaybackSettings());
+    }
+  }
+
   Future<void> stop() async {
     // Invalidate any in-flight _playCurrent: without this, a load
     // that finishes after the user closed the sheet would seek + play
     // with no UI at all (ghost audio), and its finally{} would clear
     // the next load's spinner.
-    _playToken++;
-    _wordEnd = null;
-    _wordArmed = false;
+    final token = ++_playToken;
+    _finishToken = -1;
+    _cancelRepeat();
     await _player.stop();
-    if (!_disposed) {
+    if (!_disposed && token == _playToken) {
       isPlaying = false;
+      // A load invalidated by stop() must not leave the spinner up
+      // (v13.2 bug 2): the in-flight _playCurrent's finally{} skips
+      // clearing when its token no longer matches — so stop() itself
+      // clears it. The token check above keeps a NEWER load's
+      // spinner (started after this stop) untouched.
+      isLoading = false;
       notifyListeners();
     }
   }
@@ -381,16 +384,16 @@ class AudioPlayerController extends ChangeNotifier {
 
   // -- internals -------------------------------------------------------
 
-  /// Word count of an ayah in AUDIO numbering (Quran.com segments /
-  /// wbw files), i.e. the Uthmani word list — NOT the simple-text
-  /// split, which counts extra tokens (see wordsForAyah). Used as the
-  /// bound for next/previous word, so it can never walk past the last
-  /// audio file and 404.
-  Future<int> _verseWordCount(int surah, int ayah) async {
-    if (wordSegments != null) return wordSegments!.length;
-    final words = await QuranWordData.wordsForAyah(surah, ayah);
-    return words.length;
-  }
+  /// Word count of an ayah in DISPLAY numbering (the QCF word list
+  /// the reader taps): the bound for next/previous word, so it can
+  /// never walk past the last word. This is the count the user sees
+  /// (4 words in 37:130), NOT the morphology/audio count (3 there —
+  /// إِلۡ يَاسِينَ is one audio word): with the audio count, next-word
+  /// from word 3 jumped to the next ayah and skipped يَاسِينَ
+  /// entirely (v13.2 bug 1). Synchronous — the QCF map is built from
+  /// bundled data only.
+  int _qcfWordCount(int surah, int ayah) =>
+      buildQcfWordMap(surah, ayah).wordCount;
 
   Future<void> _nextWord() async {
     final ayah = currentAyah;
@@ -406,8 +409,7 @@ class AudioPlayerController extends ChangeNotifier {
     queue = [nextAyah];
     queueIndex = 0;
     wordIndex = 1;
-    wordSegments = null;
-    wordCount = await _verseWordCount(nextAyah.$1, nextAyah.$2);
+    wordCount = _qcfWordCount(nextAyah.$1, nextAyah.$2);
     onAyahChanged?.call(nextAyah);
     await _playCurrent();
   }
@@ -425,8 +427,7 @@ class AudioPlayerController extends ChangeNotifier {
     if (prevAyah == null) return;
     queue = [prevAyah];
     queueIndex = 0;
-    wordSegments = null;
-    wordCount = await _verseWordCount(prevAyah.$1, prevAyah.$2);
+    wordCount = _qcfWordCount(prevAyah.$1, prevAyah.$2);
     wordIndex = wordCount;
     onAyahChanged?.call(prevAyah);
     await _playCurrent();
@@ -450,6 +451,11 @@ class AudioPlayerController extends ChangeNotifier {
 
   Future<void> _onItemFinished() async {
     if (_disposed || queue.isEmpty) return;
+    // Only the play that actually STARTED may finish: a stale
+    // `completed` (the previous item's file ending while the next
+    // item is still downloading) must not advance the new queue or
+    // stop the new load (v13.2 bugs 1+2 — see [_finishToken]).
+    if (_playToken != _finishToken) return;
     if (_handlingFinish) return;
     if (_finishedToken == _playToken) return;
     _finishedToken = _playToken;
@@ -485,18 +491,49 @@ class AudioPlayerController extends ChangeNotifier {
     }
   }
 
+  /// Total budget for one play attempt (load + play), v13.2 bug 2:
+  /// every step below is time-boxed on its own, but the CHAIN (wbw
+  /// cache → wbw stream → legacy stream) could still spin the
+  /// indicator for ~3 minutes on a dying connection. The budget
+  /// caps the whole attempt: on expiry the attempt is invalidated
+  /// (token bump, so in-flight helpers bail before playing) and the
+  /// sheet shows the error with a retry. A retry then usually finds
+  /// the file already cached by the abandoned download.
+  ///
+  /// Mutable (not const) so tests can shorten it to prove the
+  /// expiry path without waiting 60 s; production always uses 60 s.
+  static Duration playBudget = const Duration(seconds: 60);
+
   Future<void> _playCurrent({bool isReplay = false}) async {
     final ayah = currentAyah;
     if (ayah == null) return;
     final token = ++_playToken;
+    _finishToken = -1;
     if (!isReplay) _itemPlays = 1;
-    _wordEnd = null;
-    _wordEndHandled = false;
-    _wordArmed = false;
     lastError = null;
     isLoading = true;
     notifyListeners();
 
+    // Stop the previous audio FIRST, before any download await: the
+    // old file must not complete mid-load and fire a stale finish
+    // that advances the NEW queue or stops the NEW load (v13.2 bugs
+    // 1+2). Without this, the old ayah finishing during a slow
+    // download on weak internet was the wrong-ayah / stuck-spinner
+    // race.
+    await _player.stop();
+    if (token != _playToken || _disposed) return;
+
+    // The budget timer: on expiry it invalidates this attempt (see
+    // [playBudget]). Cancelled in the finally below; it can only
+    // fire while this token is still current.
+    final budgetTimer = Timer(playBudget, () {
+      if (_disposed || token != _playToken) return;
+      _playToken++;
+      _finishToken = -1;
+      isLoading = false;
+      notifyListeners();
+      _reportError(_playCurrent);
+    });
     try {
       if (scope == PlayerScope.word) {
         await _playWordCurrent(token, ayah);
@@ -508,8 +545,6 @@ class AudioPlayerController extends ChangeNotifier {
         final url = everyayahUrl(reciter, ayah.$1, ayah.$2);
         final local = await downloads?.cacheAyahFile(reciter, ayah.$1, ayah.$2);
         if (token != _playToken || _disposed) return;
-        await _player.stop();
-        await _player.setLoopMode(LoopMode.off);
         // Bounded: the old bare setUrl could hang forever on a
         // stalled connection, leaving the spinner up with no sound
         // and no error.
@@ -521,8 +556,9 @@ class AudioPlayerController extends ChangeNotifier {
           await _player.setUrl(url).timeout(const Duration(seconds: 20));
         }
         if (token != _playToken || _disposed) return;
-        await _player.setSpeed(speed);
-        await _player.play();
+        await _player.setSpeed(speed).timeout(const Duration(seconds: 5));
+        await _player.play().timeout(const Duration(seconds: 10));
+        _finishToken = token;
         // Prefetch the next ayah while this one plays, so page /
         // surah playback has no gap between ayahs on a weak
         // connection. Best-effort: failures are ignored, the next
@@ -536,15 +572,23 @@ class AudioPlayerController extends ChangeNotifier {
         }
       }
     } on TimeoutException {
-      _reportError(_playCurrent);
+      // A superseded attempt's failure is not the user's error
+      // (v13.2 bug 2): the load this attempt was waiting on was
+      // abandoned by stop() / a newer play, and just_audio reports
+      // the cancelled load as an error — swallowing it keeps stop()
+      // silent instead of flashing a bogus "check your internet".
+      if (token == _playToken) _reportError(_playCurrent);
     } on PlayerException {
-      _reportError(_playCurrent);
+      if (token == _playToken) _reportError(_playCurrent);
     } catch (_) {
-      _reportError(_playCurrent);
+      if (token == _playToken) _reportError(_playCurrent);
     } finally {
+      budgetTimer.cancel();
       // A stale token's finally must not clear the newer load's
       // spinner (the old code did, so the spinner vanished while
-      // the new word was still loading).
+      // the new word was still loading). And when the budget timer
+      // fired above, it already cleared the spinner — this check
+      // (token mismatch by then) keeps that from being undone.
       if (!_disposed && token == _playToken) {
         isLoading = false;
         notifyListeners();
@@ -552,117 +596,94 @@ class AudioPlayerController extends ChangeNotifier {
     }
   }
 
-  /// Word scope: segments come from the bundle / cache / API
-  /// (wordSegmentsFor — no per-tap API wait for Husary), then the
-  /// word is played from the word-voice reciter's ayah recording.
-  /// Every step is time-boxed.
-  ///
-  /// Word voice (v13.1): the selected reciter when Quran.com
-  /// carries it, otherwise محمود الحصري ([wordVoiceReciterIndex]) —
-  /// his own real voice, clear and complete. The AYAH scope still
-  /// uses the SELECTED reciter (see _playCurrent); only this word
-  /// path resolves the fallback.
-  ///
-  /// Cache-on-play (v13): the ayah file is downloaded once and the
-  /// segment is played from the LOCAL file — no streaming stutter,
-  /// no start-late on a weak connection, instant on repeat. For the
-  /// Husary fallback the HUSARY ayah file is the one cached
-  /// (`cacheAyahFile(reciters[0], ...)`), so the word plays from
-  /// disk in Husary's voice. A stalled download falls back to
-  /// streaming the ayah file, then to the small wbw word file
-  /// (43–102 KB, no seek, starts at 0), which is itself cached
-  /// after its first download — wbw is the LAST resort only, when
-  /// the Husary file cannot be fetched either.
+  /// Word scope (v13.2): the word plays ONLY from Quran.com's
+  /// dedicated per-word recording (wbw) — one fixed teaching voice,
+  /// complete and clear by construction, exactly like the world
+  /// apps. No segments, no cutting, no ayah file: the v13/v13.1
+  /// segment fallback loaded the ayah file and cut the word out of
+  /// it, and whenever the seek failed the tap played the whole ayah
+  /// (the user's #1 complaint) — so the fallback is GONE, not
+  /// demoted. If the wbw file cannot be fetched, the sheet shows
+  /// the error with a retry. Every step is time-boxed (see
+  /// [playBudget]).
   Future<void> _playWordCurrent(int token, (int, int) ayah) async {
-    final word = wordIndex ?? 1;
-    final wordReciterIndex = wordVoiceReciterIndex(reciterIndex);
-    final wordReciter = reciters[wordReciterIndex];
-    final qcUrl = quranComAyahUrl(wordReciter, ayah.$1, ayah.$2);
-    if (qcUrl != null) {
-      wordSegments ??=
-          await wordSegmentsFor(wordReciter, ayah.$1, ayah.$2);
-      final segments = wordSegments;
-      if (segments != null && word - 1 < segments.length) {
-        wordCount = segments.length;
-        final seg = segments[word - 1];
-        // Padded window (v12): start slightly early, end slightly
-        // late — the word plays completely, never cut at either end,
-        // and never jumps to the ayah's beginning or end. The last
-        // word gets the longer end padding (v13): its decay runs
-        // past the segment end and there is no next word to swallow.
-        // v13.1 re-verified on REAL Husary audio (1:1, 2:33, 2:255,
-        // 112:1 — all 80 words): worst start margin +50 ms at
-        // -40 dBFS, worst true end margin +200 ms, no word cut, so
-        // the 120/150/400 ms padding is kept, not widened (a wider
-        // start pad would swallow more of the previous word).
-        final (seekTo, wordEnd) = paddedWordWindow(
-          seg,
-          isLastWord: word >= segments.length,
-        );
-        _wordEnd = wordEnd;
-        wordUsesWbw = false;
-        wordUsesHusaryFallback = wordReciterIndex != reciterIndex;
-        if (token != _playToken || _disposed) return;
-        await _player.stop();
-        await _player.setLoopMode(LoopMode.off);
-        // Downloaded file first (offline): the word-voice reciter's
-        // everyayah recording, which the segments were timed
-        // against. For Husary the cached everyayah file is
-        // byte-identical to the Quran.com file (verified 2026-11-17,
-        // md5 5383bd2d… for 2:33), so the timings transfer exactly;
-        // for the other segment reciters it is the same recording
-        // at a different bitrate, inside the padding. A corrupt
-        // local file falls through to streaming, then to wbw below.
-        var played = false;
-        final local =
-            await downloads?.cacheAyahFile(wordReciter, ayah.$1, ayah.$2);
-        if (token != _playToken || _disposed) return;
-        if (local != null) played = await _loadLocal(local, seekTo);
-        if (!played) played = await _loadAndPlay(qcUrl, seekTo);
-        if (played) {
-          // The word really plays now: arm the position listener
-          // (see [_wordArmed] — stale positions during the load
-          // above must not count as this word's end).
-          _wordArmed = true;
-          return;
-        }
-        // Ayah file stalled: fall through to the wbw file below.
-        // The seek/end state belongs to the ayah file — reset it so
-        // the position listener cannot cut the wbw file short.
-        _wordEnd = null;
-        _wordEndHandled = false;
-      }
+    final qcfWord = wordIndex ?? 1;
+    if (await _playWbwWord(token, ayah, qcfWord)) return;
+    // wbw failed on every host (and not cached): nothing else to
+    // play — report the error, never an ayah file.
+    wordUsesWbw = false;
+    _reportError(_playCurrent);
+  }
+
+  /// Plays one word from its dedicated wbw recording (v13.2).
+  /// Returns true when the word really plays (cached file, or the
+  /// new CDN, or the legacy host), false when every wbw attempt
+  /// failed — the caller then reports the error. The wbw file has
+  /// no seek and no word end: it plays to its own completion, so
+  /// the `completed` state is its only finish. [wordUsesWbw] is set
+  /// ONLY on success.
+  ///
+  /// [qcfWord] is the 1-based QCF position (the reader's tap index);
+  /// [audioPositionForQcfWord] translates it to the wbw numbering
+  /// (in the 4 merged ayahs the two differ).
+  Future<bool> _playWbwWord(int token, (int, int) ayah, int qcfWord) async {
+    final tokens = await QuranWordData.wordsForAyah(ayah.$1, ayah.$2);
+    if (token != _playToken || _disposed) return false;
+    final audioPos = audioPositionForQcfWord(ayah.$1, ayah.$2, qcfWord);
+    if (audioPos < 1 || audioPos > tokens.length) return false;
+    // The wbw file number is NOT the word position: the wbw set
+    // numbers pause marks as positions of their own, and no rule
+    // from our tokens reproduces it — the shift table (bundled,
+    // derived from the API's audio_urls) is the ground truth (see
+    // [wbwFileNumberFromShifts]).
+    final shifts = await wbwShiftsForAyah(ayah.$1, ayah.$2);
+    if (token != _playToken || _disposed) return false;
+    final fileNumber = wbwFileNumberFromShifts(shifts, audioPos);
+    final wbwLocal =
+        await downloads?.cacheWbwFile(ayah.$1, ayah.$2, fileNumber);
+    if (token != _playToken || _disposed) return false;
+    if (wbwLocal != null &&
+        await _loadLocal(wbwLocal, Duration.zero, token)) {
+      wordUsesWbw = true;
+      _finishToken = token;
+      return true;
     }
-    // No segments (one of the 18 bundle gaps, or API + cache both
-    // failed) or the ayah file stalled: the small wbw word
-    // recording — cached on first download, played from disk after
-    // that. This is the last resort, not the Husary fallback: the
-    // word is NOT in Husary's voice here, and the sheet says so.
-    wordUsesWbw = true;
-    wordUsesHusaryFallback = false;
-    if (token != _playToken || _disposed) return;
-    await _player.stop();
-    await _player.setLoopMode(LoopMode.off);
-    final wbwLocal = await downloads?.cacheWbwFile(ayah.$1, ayah.$2, word);
-    if (token != _playToken || _disposed) return;
-    final ok = wbwLocal != null
-        ? await _loadLocal(wbwLocal, Duration.zero)
-        : await _loadAndPlay(
-            wbwWordUrl(ayah.$1, ayah.$2, word),
-            Duration.zero,
-          );
-    if (!ok) _reportError(_playCurrent);
+    // No cached file (or a corrupt one): stream, new CDN first,
+    // legacy host second.
+    if (await _loadAndPlay(
+        wbwWordUrl(ayah.$1, ayah.$2, fileNumber), Duration.zero, token)) {
+      wordUsesWbw = true;
+      _finishToken = token;
+      return true;
+    }
+    if (await _loadAndPlay(
+        wbwWordUrlLegacy(ayah.$1, ayah.$2, fileNumber),
+        Duration.zero,
+        token)) {
+      wordUsesWbw = true;
+      _finishToken = token;
+      return true;
+    }
+    return false;
   }
 
   /// Same as [_loadAndPlay] but for a downloaded local file
   /// (setFilePath instead of setUrl). Returns false on any error so
-  /// the caller can fall back to streaming.
-  Future<bool> _loadLocal(File file, Duration seekTo) async {
+  /// the caller can fall back to streaming. The [token] is checked
+  /// after every await: a superseded load must bail BEFORE playing
+  /// (no ghost audio after a stop / timeout invalidated it).
+  Future<bool> _loadLocal(File file, Duration seekTo, int token) async {
     try {
       await _player.setFilePath(file.path).timeout(const Duration(seconds: 10));
+      if (token != _playToken) return false;
       await _player.seek(seekTo).timeout(const Duration(seconds: 5));
-      await _player.setSpeed(speed);
-      await _player.play();
+      if (token != _playToken) return false;
+      await _player.setSpeed(speed).timeout(const Duration(seconds: 5));
+      await _player.play().timeout(const Duration(seconds: 10));
+      if (token != _playToken) {
+        await _player.stop();
+        return false;
+      }
       return await _waitForPositionBeyond(seekTo);
     } catch (_) {
       return false;
@@ -674,13 +695,20 @@ class AudioPlayerController extends ChangeNotifier {
   /// stalled buffer leaves the position frozen, which is exactly
   /// the "spinner forever, no sound" failure. Returns false on any
   /// timeout or error instead of throwing; the caller decides the
-  /// fallback. The token is checked by the caller.
-  Future<bool> _loadAndPlay(String url, Duration seekTo) async {
+  /// fallback. The [token] is checked after every await (see
+  /// [_loadLocal]).
+  Future<bool> _loadAndPlay(String url, Duration seekTo, int token) async {
     try {
       await _player.setUrl(url).timeout(const Duration(seconds: 10));
+      if (token != _playToken) return false;
       await _player.seek(seekTo).timeout(const Duration(seconds: 5));
-      await _player.setSpeed(speed);
-      await _player.play();
+      if (token != _playToken) return false;
+      await _player.setSpeed(speed).timeout(const Duration(seconds: 5));
+      await _player.play().timeout(const Duration(seconds: 10));
+      if (token != _playToken) {
+        await _player.stop();
+        return false;
+      }
       return await _waitForPositionBeyond(seekTo);
     } catch (_) {
       return false;
