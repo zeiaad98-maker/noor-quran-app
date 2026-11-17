@@ -9,6 +9,8 @@ import 'package:noor_quran/data/audio_downloads.dart';
 import 'package:noor_quran/data/quran_audio.dart';
 import 'package:noor_quran/widgets/noor_qcf_page.dart';
 
+import 'zip_fixture.dart';
+
 /// v13 audio (the user's top priority): pronunciation must be clear,
 /// pure and complete — for the WORD and the AYAH.
 ///
@@ -88,8 +90,16 @@ void main() {
 
     test('cacheAyahFile downloads once, replays from disk', () async {
       final requested = <String>[];
+      // v13.5: the ayah comes from the per-surah ZIP first — the
+      // ZIP carries the ayah entry, so the per-ayah URL is never
+      // requested at all.
+      final zipBytes =
+          buildSurahZip({'002033.mp3': [9, 8, 7, 6]}, stored: true);
       final service = await makeService(MockClient((request) async {
         requested.add(request.url.toString());
+        if (request.url.toString().contains('/zips/')) {
+          return http.Response.bytes(zipBytes, 200);
+        }
         return http.Response.bytes([9, 8, 7, 6], 200);
       }));
       addTearDown(service.dispose);
@@ -99,7 +109,7 @@ void main() {
       expect(first, isNotNull);
       expect(await first!.readAsBytes(), [9, 8, 7, 6]);
       expect(requested, [
-        'https://everyayah.com/data/khalefa_al_tunaiji_64kbps/002033.mp3',
+        'http://www.everyayah.com/data/khalefa_al_tunaiji_64kbps/zips/002.zip',
       ]);
       // The player sees the same file through the sync accessor.
       expect(service.localAyahFile(tunaiji, 2, 33)?.path, first.path);
