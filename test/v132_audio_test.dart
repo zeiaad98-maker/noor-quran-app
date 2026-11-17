@@ -31,7 +31,8 @@ import 'fake_just_audio.dart';
 /// wrong relative to its own files, so the shift table (and its
 /// generator) were deleted; there is no table any more.
 ///
-/// Fallback chain (v13.2, bug A): wbw (new CDN, then legacy host) →
+/// Fallback chain (v13.2, bug A; v13.5 adds SurahPedia as the third
+/// wbw host): wbw (new CDN, then legacy host, then SurahPedia) →
 /// sheet error with retry. There is NO segment/ayah fallback any
 /// more — the segment subsystem was deleted: a word tap that cannot
 /// fetch its wbw file must NEVER play the ayah file (that was the
@@ -205,14 +206,18 @@ void main() {
     });
 
     // v13.2 bug A: a word tap plays ONLY its wbw file. When wbw
-    // cannot be fetched on either host, the word does NOT fall back
+    // cannot be fetched on any host, the word does NOT fall back
     // to the ayah file (or any segment cut) — it reports an error
     // and the sheet offers a retry. The regression: NO ayah URL is
     // ever loaded for a word play.
-    test('wbw fails on both hosts → error, NO ayah file loaded', () async {
+    test('wbw fails on all three hosts → error, NO ayah file loaded',
+        () async {
       fake.autoFinish = false;
-      fake.failLoadSubstrings
-          .addAll(['audio.qurancdn.com', 'verses.quran.com']);
+      fake.failLoadSubstrings.addAll([
+        'audio.qurancdn.com',
+        'verses.quran.com',
+        'resources.surahpedia.com',
+      ]);
       controller.reciterIndex = 12; // خليفة الطنيجي (default)
       controller.queue = [(2, 33)];
       controller.queueIndex = 0;
@@ -223,8 +228,12 @@ void main() {
       expect(fake.loadUris, [
         'https://audio.qurancdn.com/wbw/002_033_001.mp3',
         'https://verses.quran.com/wbw/002_033_001.mp3',
-      ], reason: 'only the two wbw hosts are attempted');
-      expect(fake.loadUris.every((u) => u.contains('/wbw/')), isTrue,
+        'https://resources.surahpedia.com/Word_by-Word/2/002033001.mp3',
+      ], reason: 'only the three wbw hosts are attempted');
+      expect(
+          fake.loadUris.every((u) =>
+              u.contains('/wbw/') || u.contains('Word_by-Word')),
+          isTrue,
           reason: 'no ayah file, no segment file, nothing else');
       expect(controller.wordUsesWbw, isFalse);
       expect(controller.lastError, isNotNull,
@@ -236,6 +245,7 @@ void main() {
       fake.failLoadSubstrings.addAll([
         'audio.qurancdn.com',
         'verses.quran.com',
+        'resources.surahpedia.com',
       ]);
       controller.reciterIndex = 12;
       controller.queue = [(2, 33)];
