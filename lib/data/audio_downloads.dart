@@ -91,11 +91,11 @@ class AudioDownloadService extends ChangeNotifier {
 
   /// Local wbw word file, when it was cached (sync). Null when not
   /// cached or before [init] finished.
-  File? localWbwFile(int surah, int ayah, int word) {
+  File? localWbwFile(int surah, int ayah, int fileNumber) {
     final dir = _baseDir;
     if (dir == null) return null;
     final file = File(
-        '${dir.path}/wbw/${ayahFileName(surah, ayah)}_${word.toString().padLeft(3, '0')}.mp3');
+        '${dir.path}/wbw/${ayahFileName(surah, ayah)}_${fileNumber.toString().padLeft(3, '0')}.mp3');
     return file.existsSync() ? file : null;
   }
 
@@ -123,34 +123,46 @@ class AudioDownloadService extends ChangeNotifier {
   }
 
   /// Cache-on-play (v13) for one wbw word file (the small per-word
-  /// recording, ~40–140 KB). Same guarantees as [cacheAyahFile]:
-  /// downloaded once, played from disk after that. Returns the file,
-  /// or null when the download fails (the player falls back to
-  /// streaming). Never throws.
-  Future<File?> cacheWbwFile(int surah, int ayah, int word) async {
-    final existing = localWbwFile(surah, ayah, word);
+  /// recording, ~25–140 KB). Same guarantees as [cacheAyahFile]:
+  /// downloaded once, played from disk after that. [fileNumber] is
+  /// the wbw FILE number (see [wbwFileNumberFromShifts]) — it is also
+  /// the cache key, so one cached file serves one wbw recording.
+  /// Tries the current CDN first, then the legacy host (v13.2).
+  /// Each attempt is 15 s (the files are tiny — if one has not
+  /// arrived in 15 s the connection is too slow for it; the word
+  /// path's total budget then reports the error instead of spinning
+  /// for a minute). Returns the file, or null when both downloads
+  /// fail (the player then reports the error). Never throws.
+  Future<File?> cacheWbwFile(int surah, int ayah, int fileNumber) async {
+    final existing = localWbwFile(surah, ayah, fileNumber);
     if (existing != null) return existing;
     final dir = _baseDir;
     if (dir == null) return null;
-    final ok = await _fetchToFile(
-      wbwWordUrl(surah, ayah, word),
-      File(
-          '${dir.path}/wbw/${ayahFileName(surah, ayah)}_${word.toString().padLeft(3, '0')}.mp3'),
-    );
-    if (!ok) return null;
-    return localWbwFile(surah, ayah, word);
+    final file = File('${dir.path}/wbw/${ayahFileName(surah, ayah)}_'
+        '${fileNumber.toString().padLeft(3, '0')}.mp3');
+    if (await _fetchToFile(wbwWordUrl(surah, ayah, fileNumber), file,
+        timeoutSeconds: 15)) {
+      return localWbwFile(surah, ayah, fileNumber);
+    }
+    if (await _fetchToFile(
+        wbwWordUrlLegacy(surah, ayah, fileNumber), file,
+        timeoutSeconds: 15)) {
+      return localWbwFile(surah, ayah, fileNumber);
+    }
+    return null;
   }
 
-  /// One file: GET (30 s timeout), verify it is an mp3 (non-empty),
-  /// write it to disk ATOMICALLY (temp file + rename) so a partial
-  /// download is never mistaken for a complete cached file. A failed
-  /// or partial download leaves nothing behind. Returns false on any
-  /// failure. Never throws.
-  Future<bool> _fetchToFile(String url, File file) async {
+  /// One file: GET ([timeoutSeconds], default 30 s), verify it is an
+  /// mp3 (non-empty), write it to disk ATOMICALLY (temp file +
+  /// rename) so a partial download is never mistaken for a complete
+  /// cached file. A failed or partial download leaves nothing
+  /// behind. Returns false on any failure. Never throws.
+  Future<bool> _fetchToFile(String url, File file,
+      {int timeoutSeconds = 30}) async {
     try {
       final response = await _client
           .get(Uri.parse(url))
-          .timeout(const Duration(seconds: 30));
+          .timeout(Duration(seconds: timeoutSeconds));
       if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
         return false;
       }
