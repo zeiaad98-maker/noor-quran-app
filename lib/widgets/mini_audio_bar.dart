@@ -61,6 +61,24 @@ class MiniAudioBar extends StatelessWidget {
                     style: TextStyle(fontSize: 12, color: Colors.black54),
                   ),
                 ),
+              // While repeating, show how many plays remain (v13.2
+              // bug B / best-apps rule 3) — only while a repeat play
+              // is actually running or loading: once the sequence has
+              // stopped, the count is spent and the line goes away.
+              if (controller.repeatItem &&
+                  (controller.isPlaying || controller.isLoading))
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 2),
+                  child: Text(
+                    controller.repeatCount == 0
+                        ? 'التكرار: مستمر — أوقفْه بزر التكرار'
+                        : 'التكرار: متبقٍ ${controller.repeatRemaining} ${_repeatUnit(controller.repeatRemaining)}',
+                    style: const TextStyle(
+                        fontSize: 12,
+                        color: _green,
+                        fontWeight: FontWeight.bold),
+                  ),
+                ),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
@@ -203,5 +221,12 @@ class MiniAudioBar extends StatelessWidget {
           ),
       ],
     );
+  }
+
+  /// Arabic unit for the remaining-repeat count (1 مرة، 2 مرتان، 3+ مرات).
+  static String _repeatUnit(int count) {
+    if (count == 1) return 'مرة';
+    if (count == 2) return 'مرتان';
+    return 'مرات';
   }
 }
