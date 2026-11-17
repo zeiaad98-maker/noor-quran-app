@@ -15,8 +15,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// [quranComRecitationId] / [quranComAudioPrefix] are only set when
 /// Quran.com API v4 carries this reciter: they power per-word audio
 /// (timed segments inside the reciter's own ayah recording). Reciters
-/// without them still get word audio from Quran.com's word-by-word
-/// recording (`wbw/...mp3`, one fixed voice).
+/// without them get their word audio in محمود الحصري's voice first
+/// (v13.1 — the user's decision 2026-11-17: his own real voice,
+/// clear and complete); the fixed wbw recording is only the last
+/// resort when the Husary file cannot be fetched either.
 ///
 /// Every URL in this list was verified with curl before it was added
 /// (mp3quran `001.mp3` -> 200 audio/mpeg, everyayah `001001.mp3` -> 200).
@@ -164,8 +166,9 @@ String? quranComAyahUrl(Reciter reciter, int surah, int ayah) {
 }
 
 /// Word-by-word recording from Quran.com (one fixed voice, works for
-/// every word of every ayah). Used for reciters without Quran.com
-/// segments, so word audio is never simply missing.
+/// every word of every ayah). LAST resort for word audio only: when
+/// neither the selected reciter nor الحصري can supply the word (no
+/// segments, or the ayah file cannot be fetched).
 String wbwWordUrl(int surah, int ayah, int wordIndex) =>
     'https://verses.quran.com/wbw/'
     '${surah.toString().padLeft(3, '0')}_'
@@ -193,7 +196,24 @@ int resolveDefaultReciterIndex(int? stored) {
   return stored.clamp(0, reciters.length - 1);
 }
 
-/// Quran.com segment numbers are ints for most recitations but STRINGS
+/// The reciter whose voice WORD playback uses (v13.1 — the user's
+/// decision, Tue 2026-11-17): the selected reciter when Quran.com
+/// carries it (it has per-word segments), otherwise محمود الحصري
+/// (index 0) — his own real voice, clear and complete — instead of
+/// the fixed wbw voice. Pure, so it is pinned by unit tests.
+///
+/// The AYAH scope is untouched: ayah / page / surah playback always
+/// uses the SELECTED reciter (الطنيجي by default). Only the word
+/// scope goes through this function.
+///
+/// Affected (no segments → Husary): ماهر المعيقلي (4)، علي الحذيفي
+/// (5)، أيمن سويد (7)، إبراهيم الأخضر (11)، خليفة الطنيجي (12)،
+/// ياسر الدوسري (14). The other 9 keep their own voice.
+int wordVoiceReciterIndex(int selectedIndex) {
+  final clamped = selectedIndex.clamp(0, reciters.length - 1);
+  final selected = reciters[clamped];
+  return selected.quranComRecitationId != null ? clamped : 0;
+}
 /// for some (verified live 2026-11-17: Sudais / recitation 3 returns
 /// `["0", "1", "50", "570"]` for 2:33) — a bare `as int` throws and
 /// the whole ayah falls back to the wbw voice. Coerce both shapes.
@@ -280,7 +300,11 @@ Future<List<WordSegment>?> fetchWordSegments(
 //   2. SharedPreferences cache for the other segment reciters
 //      (one API call per ayah, ever);
 //   3. the API, cached on success.
-// Anything without segments falls back to the wbw recording.
+// A reciter without segments never reaches this function for its
+// own voice: the controller resolves the word voice first
+// (wordVoiceReciterIndex — Husary), so this is only called for a
+// reciter that HAS segments. Anything without segments here falls
+// back to wbw in the controller, exactly as a failed API call would.
 
 /// Bundled Husary (recitation 6) segments for the whole Mushaf:
 /// `assets/quran_data/word_segments_husary.json`, generated from the
