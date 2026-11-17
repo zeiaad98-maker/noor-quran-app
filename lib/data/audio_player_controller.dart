@@ -44,6 +44,7 @@ class AudioPlayerController extends ChangeNotifier {
   bool isMuted = false;
   bool repeatItem = false;
   bool repeatScope = false;
+
   /// 0 = endless, otherwise the number of plays.
   int repeatCount = 3;
   double speed = 1.0;
@@ -97,21 +98,35 @@ class AudioPlayerController extends ChangeNotifier {
   static const int wordPadStartMs = 120;
   static const int wordPadEndMs = 150;
 
+  /// Extra end padding for the LAST word of an ayah (v13): there is
+  /// no next word to swallow, and the final word's decay runs past
+  /// its segment end (verified on Husary 2:33: the last word's sound
+  /// ends ~90 ms after the padded end, i.e. its tail was cut). 400 ms
+  /// covers the decay with margin; the file's trailing silence
+  /// absorbs the rest, and the file-completed state ends playback
+  /// if the window ever runs past the file.
+  static const int wordPadEndLastWordMs = 400;
+
   /// Padded playback window for one word segment: (seekTo, end).
   /// The start is clamped at zero (the first word of an ayah).
-  /// Pure, so it is pinned by unit tests.
-  static (Duration, Duration) paddedWordWindow(WordSegment seg) {
+  /// The last word of an ayah gets the longer end padding (there is
+  /// no next word after it). Pure, so it is pinned by unit tests.
+  static (Duration, Duration) paddedWordWindow(
+    WordSegment seg, {
+    bool isLastWord = false,
+  }) {
     final startMs = seg.startMs - wordPadStartMs;
+    final endMs =
+        seg.endMs + (isLastWord ? wordPadEndLastWordMs : wordPadEndMs);
     return (
       Duration(milliseconds: startMs < 0 ? 0 : startMs),
-      Duration(milliseconds: seg.endMs + wordPadEndMs),
+      Duration(milliseconds: endMs),
     );
   }
 
   bool _disposed = false;
 
-  (int, int)? get currentAyah =>
-      queue.isEmpty ? null : queue[queueIndex];
+  (int, int)? get currentAyah => queue.isEmpty ? null : queue[queueIndex];
 
   Reciter get reciter => reciters[reciterIndex];
 
@@ -394,9 +409,12 @@ class AudioPlayerController extends ChangeNotifier {
       if (scope == PlayerScope.word) {
         await _playWordCurrent(token, ayah);
       } else {
+        // Cache-on-play (v13): the ayah file is downloaded once and
+        // played from disk after that — clear, pure and complete on
+        // a weak connection, instant on repeat, offline after.
+        // A failed download falls back to streaming below.
         final url = everyayahUrl(reciter, ayah.$1, ayah.$2);
-        // Downloaded file first (offline), stream otherwise.
-        final local = downloads?.localAyahFile(reciter, ayah.$1, ayah.$2);
+        final local = await downloads?.cacheAyahFile(reciter, ayah.$1, ayah.$2);
         if (token != _playToken || _disposed) return;
         await _player.stop();
         await _player.setLoopMode(LoopMode.off);
@@ -408,13 +426,22 @@ class AudioPlayerController extends ChangeNotifier {
               .setFilePath(local.path)
               .timeout(const Duration(seconds: 20));
         } else {
-          await _player
-              .setUrl(url)
-              .timeout(const Duration(seconds: 20));
+          await _player.setUrl(url).timeout(const Duration(seconds: 20));
         }
         if (token != _playToken || _disposed) return;
         await _player.setSpeed(speed);
         await _player.play();
+        // Prefetch the next ayah while this one plays, so page /
+        // surah playback has no gap between ayahs on a weak
+        // connection. Best-effort: failures are ignored, the next
+        // play falls back to streaming.
+        final dl = downloads;
+        if (dl != null && queueIndex + 1 < queue.length) {
+          final nextAyah = queue[queueIndex + 1];
+          unawaited(
+            dl.cacheAyahFile(reciter, nextAyah.$1, nextAyah.$2).then((_) {}),
+          );
+        }
       }
     } on TimeoutException {
       _reportError(_playCurrent);
@@ -436,35 +463,48 @@ class AudioPlayerController extends ChangeNotifier {
   /// Word scope: segments come from the bundle / cache / API
   /// (wordSegmentsFor — no per-tap API wait for Husary), then the
   /// word is played from the reciter's own ayah recording. Every
-  /// step is time-boxed, and a stalled ayah file falls back to the
-  /// small wbw word file (43–102 KB, no seek, starts at 0) instead
-  /// of spinning forever: on a 20 KB/s connection the full 408 KB
-  /// ayah file needs ~18 s before a late word can sound, while the
-  /// wbw file needs ~1–4 s.
+  /// step is time-boxed.
+  ///
+  /// Cache-on-play (v13): the ayah file is downloaded once and the
+  /// segment is played from the LOCAL file — no streaming stutter,
+  /// no start-late on a weak connection, instant on repeat. A
+  /// stalled download falls back to streaming the ayah file, then
+  /// to the small wbw word file (43–102 KB, no seek, starts at 0),
+  /// which is itself cached after its first download.
   Future<void> _playWordCurrent(int token, (int, int) ayah) async {
     final word = wordIndex ?? 1;
     final qcUrl = quranComAyahUrl(reciter, ayah.$1, ayah.$2);
     if (qcUrl != null) {
-      wordSegments ??=
-          await wordSegmentsFor(reciter, ayah.$1, ayah.$2);
+      wordSegments ??= await wordSegmentsFor(reciter, ayah.$1, ayah.$2);
       final segments = wordSegments;
       if (segments != null && word - 1 < segments.length) {
         wordCount = segments.length;
         final seg = segments[word - 1];
         // Padded window (v12): start slightly early, end slightly
         // late — the word plays completely, never cut at either end,
-        // and never jumps to the ayah's beginning or end.
-        final (seekTo, wordEnd) = paddedWordWindow(seg);
+        // and never jumps to the ayah's beginning or end. The last
+        // word gets the longer end padding (v13): its decay runs
+        // past the segment end and there is no next word to swallow.
+        final (seekTo, wordEnd) = paddedWordWindow(
+          seg,
+          isLastWord: word >= segments.length,
+        );
         _wordEnd = wordEnd;
         wordUsesWbw = false;
         if (token != _playToken || _disposed) return;
         await _player.stop();
         await _player.setLoopMode(LoopMode.off);
         // Downloaded file first (offline): same everyayah recording
-        // the segments were timed against. A corrupt local file
-        // falls through to streaming, then to wbw below.
+        // the segments were timed against. For Husary the cached
+        // everyayah file is byte-identical to the Quran.com file
+        // (verified 2026-11-17, md5 5383bd2d…), so the timings
+        // transfer exactly; for the other segment reciters it is
+        // the same recording at a different bitrate, inside the
+        // padding. A corrupt local file falls through to streaming,
+        // then to wbw below.
         var played = false;
-        final local = downloads?.localAyahFile(reciter, ayah.$1, ayah.$2);
+        final local = await downloads?.cacheAyahFile(reciter, ayah.$1, ayah.$2);
+        if (token != _playToken || _disposed) return;
         if (local != null) played = await _loadLocal(local, seekTo);
         if (!played) played = await _loadAndPlay(qcUrl, seekTo);
         if (played) return;
@@ -477,15 +517,20 @@ class AudioPlayerController extends ChangeNotifier {
     }
     // No segments (reciter without them, one of the 18 bundle gaps,
     // or API + cache both failed) or the ayah file stalled: the
-    // small wbw word recording.
+    // small wbw word recording — cached on first download, played
+    // from disk after that.
     wordUsesWbw = true;
     if (token != _playToken || _disposed) return;
     await _player.stop();
     await _player.setLoopMode(LoopMode.off);
-    final ok = await _loadAndPlay(
-      wbwWordUrl(ayah.$1, ayah.$2, word),
-      Duration.zero,
-    );
+    final wbwLocal = await downloads?.cacheWbwFile(ayah.$1, ayah.$2, word);
+    if (token != _playToken || _disposed) return;
+    final ok = wbwLocal != null
+        ? await _loadLocal(wbwLocal, Duration.zero)
+        : await _loadAndPlay(
+            wbwWordUrl(ayah.$1, ayah.$2, word),
+            Duration.zero,
+          );
     if (!ok) _reportError(_playCurrent);
   }
 
@@ -553,8 +598,7 @@ class AudioPlayerController extends ChangeNotifier {
 
   void _reportError(Future<void> Function() retry) {
     isPlaying = false;
-    lastError =
-        'تعذّر تشغيل الصوت — تحقق من الاتصال بالإنترنت وحاول مجدداً';
+    lastError = 'تعذّر تشغيل الصوت — تحقق من الاتصال بالإنترنت وحاول مجدداً';
     notifyListeners();
     onError?.call(
       'الصوت يحتاج إنترنت قوي — تحقق من الاتصال وحاول مجدداً',

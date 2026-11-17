@@ -54,8 +54,7 @@ class AudioDownloadService extends ChangeNotifier {
 
   Future<void> init() async {
     _baseDir = _storageDirOverride ??
-        Directory(
-            '${(await getApplicationDocumentsDirectory()).path}/audio');
+        Directory('${(await getApplicationDocumentsDirectory()).path}/audio');
     if (!await _baseDir!.exists()) {
       await _baseDir!.create(recursive: true);
     }
@@ -68,8 +67,7 @@ class AudioDownloadService extends ChangeNotifier {
     notifyListeners();
   }
 
-  static String _surahsKey(int reciterIndex) =>
-      'audio_dl_surahs_$reciterIndex';
+  static String _surahsKey(int reciterIndex) => 'audio_dl_surahs_$reciterIndex';
 
   /// Surahs of [reciterIndex] that are fully downloaded.
   Set<int> downloadedSurahsOf(int reciterIndex) =>
@@ -91,6 +89,86 @@ class AudioDownloadService extends ChangeNotifier {
     return file.existsSync() ? file : null;
   }
 
+  /// Local wbw word file, when it was cached (sync). Null when not
+  /// cached or before [init] finished.
+  File? localWbwFile(int surah, int ayah, int word) {
+    final dir = _baseDir;
+    if (dir == null) return null;
+    final file = File(
+        '${dir.path}/wbw/${ayahFileName(surah, ayah)}_${word.toString().padLeft(3, '0')}.mp3');
+    return file.existsSync() ? file : null;
+  }
+
+  /// Cache-on-play (v13): one ayah file, downloaded on demand the
+  /// first time it is played and reused from disk after that. This
+  /// is what makes pronunciation clear and complete on a weak
+  /// connection: the player plays a LOCAL file (no mid-play stutter,
+  /// no buffering stall, no start-late), and a repeat tap is instant
+  /// and works offline. Files live in the SAME layout as the
+  /// surah downloads above, so a cached ayah also counts as
+  /// downloaded for the downloads screen — and vice versa.
+  /// Returns the file, or null when the download fails (the player
+  /// then falls back to streaming). Never throws.
+  Future<File?> cacheAyahFile(Reciter reciter, int surah, int ayah) async {
+    final existing = localAyahFile(reciter, surah, ayah);
+    if (existing != null) return existing;
+    final dir = _baseDir;
+    if (dir == null) return null;
+    final ok = await _fetchToFile(
+      everyayahUrl(reciter, surah, ayah),
+      File('${dir.path}/${reciter.everyayah}/${ayahFileName(surah, ayah)}.mp3'),
+    );
+    if (!ok) return null;
+    return localAyahFile(reciter, surah, ayah);
+  }
+
+  /// Cache-on-play (v13) for one wbw word file (the small per-word
+  /// recording, ~40–140 KB). Same guarantees as [cacheAyahFile]:
+  /// downloaded once, played from disk after that. Returns the file,
+  /// or null when the download fails (the player falls back to
+  /// streaming). Never throws.
+  Future<File?> cacheWbwFile(int surah, int ayah, int word) async {
+    final existing = localWbwFile(surah, ayah, word);
+    if (existing != null) return existing;
+    final dir = _baseDir;
+    if (dir == null) return null;
+    final ok = await _fetchToFile(
+      wbwWordUrl(surah, ayah, word),
+      File(
+          '${dir.path}/wbw/${ayahFileName(surah, ayah)}_${word.toString().padLeft(3, '0')}.mp3'),
+    );
+    if (!ok) return null;
+    return localWbwFile(surah, ayah, word);
+  }
+
+  /// One file: GET (30 s timeout), verify it is an mp3 (non-empty),
+  /// write it to disk ATOMICALLY (temp file + rename) so a partial
+  /// download is never mistaken for a complete cached file. A failed
+  /// or partial download leaves nothing behind. Returns false on any
+  /// failure. Never throws.
+  Future<bool> _fetchToFile(String url, File file) async {
+    try {
+      final response = await _client
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 30));
+      if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
+        return false;
+      }
+      final dir = file.parent;
+      if (!await dir.exists()) await dir.create(recursive: true);
+      final tmp = File('${file.path}.tmp');
+      await tmp.writeAsBytes(response.bodyBytes);
+      await tmp.rename(file.path);
+      return true;
+    } catch (_) {
+      try {
+        final tmp = File('${file.path}.tmp');
+        if (await tmp.exists()) await tmp.delete();
+      } catch (_) {}
+      return false;
+    }
+  }
+
   /// Start downloading [surahs] of the reciter (1–114). Ignored when
   /// another download is already running. Surahs already downloaded
   /// are skipped. Returns false when a job is already running.
@@ -104,8 +182,8 @@ class AudioDownloadService extends ChangeNotifier {
     _job = DownloadJob(
       reciterIndex: reciterIndex,
       surahs: pending,
-      totalFiles: pending.fold<int>(
-          0, (sum, s) => sum + quran.getVerseCount(s)),
+      totalFiles:
+          pending.fold<int>(0, (sum, s) => sum + quran.getVerseCount(s)),
     );
     notifyListeners();
     unawaited(_runJob(reciterIndex, reciter));
@@ -135,7 +213,8 @@ class AudioDownloadService extends ChangeNotifier {
           final ok = await _downloadOne(reciter, surah, ayah);
           if (!ok) {
             job.status = DownloadStatus.failed;
-            job.error = 'تعذّر تحميل الآية $surah:$ayah — تحقق من الإنترنت وحاول مجدداً';
+            job.error =
+                'تعذّر تحميل الآية $surah:$ayah — تحقق من الإنترنت وحاول مجدداً';
             notifyListeners();
             return;
           }
@@ -145,11 +224,8 @@ class AudioDownloadService extends ChangeNotifier {
           notifyListeners();
         }
         // Whole surah done — persist it (survives even a crash).
-        _downloadedSurahs
-            .putIfAbsent(reciterIndex, () => <int>{})
-            .add(surah);
-        final prefs =
-            _prefsOverride ?? await SharedPreferences.getInstance();
+        _downloadedSurahs.putIfAbsent(reciterIndex, () => <int>{}).add(surah);
+        final prefs = _prefsOverride ?? await SharedPreferences.getInstance();
         await prefs.setStringList(
           _surahsKey(reciterIndex),
           _downloadedSurahs[reciterIndex]!.map((s) => '$s').toList(),
@@ -164,27 +240,15 @@ class AudioDownloadService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// One file: GET (30s timeout), verify it is an mp3 (non-empty),
-  /// write it to disk. A partial file is deleted so the next attempt
-  /// re-fetches it cleanly.
+  /// One file of a surah job: same atomic cached download as
+  /// [cacheAyahFile] (the manifest records it only after success).
   Future<bool> _downloadOne(Reciter reciter, int surah, int ayah) async {
     final dir = Directory('${_baseDir!.path}/${reciter.everyayah}');
-    if (!await dir.exists()) await dir.create(recursive: true);
     final name = ayahFileName(surah, ayah);
-    final file = File('${dir.path}/$name.mp3');
-    try {
-      final response = await _client
-          .get(Uri.parse(everyayahUrl(reciter, surah, ayah)))
-          .timeout(const Duration(seconds: 30));
-      if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
-        return false;
-      }
-      await file.writeAsBytes(response.bodyBytes);
-      return true;
-    } catch (_) {
-      if (await file.exists()) await file.delete();
-      return false;
-    }
+    return _fetchToFile(
+      everyayahUrl(reciter, surah, ayah),
+      File('${dir.path}/$name.mp3'),
+    );
   }
 
   Future<Set<String>> _loadManifest(Reciter reciter) async {

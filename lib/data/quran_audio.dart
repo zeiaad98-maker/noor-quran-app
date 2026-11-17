@@ -47,8 +47,7 @@ const List<Reciter> reciters = [
     server: 'cdn.mp3quran.net/audio/mahmoud-husary/r1',
     everyayah: 'Husary_64kbps',
     quranComRecitationId: 6,
-    quranComAudioPrefix:
-        '//mirrors.quranicaudio.com/everyayah/Husary_64kbps/',
+    quranComAudioPrefix: '//mirrors.quranicaudio.com/everyayah/Husary_64kbps/',
   ),
   Reciter(
     name: 'مشاري العفاسي',
@@ -180,6 +179,31 @@ class WordSegment {
   const WordSegment(this.startMs, this.endMs);
 }
 
+/// Default reciter (v13): خليفة الطنيجي (index 12 in [reciters]).
+/// The user asked for him by name — the current default's pronunciation
+/// "isn't good at all when it pronounces it".
+const int defaultReciterIndex = 12;
+
+/// The reciter the player starts with. A value the user chose himself
+/// is kept; absent, or still the old default (0 = الحصري — the user
+/// never chose a reciter, so his saved value is the old default),
+/// migrates to الطنيجي. Pure, so it is pinned by unit tests.
+int resolveDefaultReciterIndex(int? stored) {
+  if (stored == null || stored == 0) return defaultReciterIndex;
+  return stored.clamp(0, reciters.length - 1);
+}
+
+/// Quran.com segment numbers are ints for most recitations but STRINGS
+/// for some (verified live 2026-11-17: Sudais / recitation 3 returns
+/// `["0", "1", "50", "570"]` for 2:33) — a bare `as int` throws and
+/// the whole ayah falls back to the wbw voice. Coerce both shapes.
+int _segmentInt(dynamic value) {
+  if (value is int) return value;
+  if (value is String) return int.tryParse(value) ?? -1;
+  if (value is num) return value.toInt();
+  return -1;
+}
+
 /// Parses a Quran.com API v4 verse object into its ordered word
 /// segments (index 0 = first word). Pure function, so it can be
 /// tested against a canned real response.
@@ -197,7 +221,13 @@ List<WordSegment>? parseWordSegments(Map<String, dynamic> verseJson) {
   for (final raw in segments) {
     final seg = raw as List<dynamic>;
     if (seg.length >= 4) {
-      byIndex[seg[0] as int] = WordSegment(seg[2] as int, seg[3] as int);
+      final index = _segmentInt(seg[0]);
+      final start = _segmentInt(seg[2]);
+      final end = _segmentInt(seg[3]);
+      // A malformed entry is skipped: the contiguity check below
+      // then returns null (wbw fallback) instead of a wrong window.
+      if (index < 0 || start < 0 || end <= start) continue;
+      byIndex[index] = WordSegment(start, end);
     }
   }
   if (byIndex.isEmpty) return null;
@@ -227,12 +257,10 @@ Future<List<WordSegment>?> fetchWordSegments(
       'https://api.quran.com/api/v4/verses/by_key/$surah:$ayah'
       '?language=ar&words=false&audio=$recitationId&fields=text_uthmani',
     );
-    final response =
-        await http.get(uri).timeout(const Duration(seconds: 15));
+    final response = await http.get(uri).timeout(const Duration(seconds: 15));
     if (response.statusCode != 200) return null;
-    final verse =
-        (jsonDecode(response.body) as Map<String, dynamic>)['verse']
-            as Map<String, dynamic>?;
+    final verse = (jsonDecode(response.body) as Map<String, dynamic>)['verse']
+        as Map<String, dynamic>?;
     if (verse == null) return null;
     return parseWordSegments(verse);
   } catch (_) {
@@ -299,16 +327,12 @@ List<WordSegment>? parseStoredSegments(List<dynamic> pairs) {
 @visibleForTesting
 void setBundledHusaryForTest(Map<String, dynamic>? bundle) {
   _bundledHusary = bundle;
-  _bundledHusaryFuture = bundle == null
-      ? null
-      : Future<void>.value();
+  _bundledHusaryFuture = bundle == null ? null : Future<void>.value();
 }
 
-Future<List<WordSegment>?> bundledWordSegments(
-    int surah, int ayah) async {
+Future<List<WordSegment>?> bundledWordSegments(int surah, int ayah) async {
   await _ensureBundledHusary();
-  final raw =
-      _bundledHusary!['$surah:$ayah'] as List<dynamic>?;
+  final raw = _bundledHusary!['$surah:$ayah'] as List<dynamic>?;
   if (raw == null) return null;
   return parseStoredSegments(raw);
 }
