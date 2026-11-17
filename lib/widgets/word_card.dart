@@ -123,12 +123,16 @@ enum _WordMode { meaning, sarf, irab }
 ///
 /// [wordIndex] is the TRUE 0-based Uthmani word index from the QCF
 /// word map (the same index the audio controller takes +1).
+/// [onPlayAyah] plays the whole AYAH (v13.2, UX D / best-apps rule
+/// 2): the ayah-listen action must be discoverable from any word
+/// tap — the small ۝ ornament is NOT the only way to hear an ayah.
 Future<void> showWordCard({
   required BuildContext context,
   required int surah,
   required int verse,
   required int wordIndex,
   required void Function(int wordIndex) onPlayWord,
+  required VoidCallback onPlayAyah,
 }) {
   return showDialog(
     context: context,
@@ -137,6 +141,7 @@ Future<void> showWordCard({
       verse: verse,
       wordIndex: wordIndex,
       onPlayWord: onPlayWord,
+      onPlayAyah: onPlayAyah,
     ),
   );
 }
@@ -146,6 +151,7 @@ class WordCard extends StatefulWidget {
   final int verse;
   final int wordIndex;
   final void Function(int wordIndex) onPlayWord;
+  final VoidCallback onPlayAyah;
 
   const WordCard({
     super.key,
@@ -153,6 +159,7 @@ class WordCard extends StatefulWidget {
     required this.verse,
     required this.wordIndex,
     required this.onPlayWord,
+    required this.onPlayAyah,
   });
 
   @override
@@ -293,6 +300,8 @@ class _WordCardState extends State<WordCard> {
               ),
               const SizedBox(height: 10),
               _toolbar(),
+              const SizedBox(height: 10),
+              _playAyahButton(),
               const SizedBox(height: 8),
               _counterRow(),
             ],
@@ -429,6 +438,34 @@ class _WordCardState extends State<WordCard> {
           ),
         ),
       ],
+    );
+  }
+
+  /// Full-width ayah-listen button (v13.2, UX D / best-apps rule 2):
+  /// hearing the AYAH must be obvious from any word tap — the small
+  /// ۝ ornament is not the only way. Separate from the word's own
+  /// استمع above (rule 6: word audio and ayah audio are different,
+  /// explicit actions). Closes the card and shows the mini bar.
+  Widget _playAyahButton() {
+    return SizedBox(
+      width: double.infinity,
+      child: FilledButton.icon(
+        onPressed: () {
+          Navigator.of(context).pop();
+          widget.onPlayAyah();
+        },
+        icon: const Icon(Icons.play_arrow, size: 20),
+        label: Text('استمع للآية',
+            style: GoogleFonts.amiri(
+                fontSize: 16, fontWeight: FontWeight.bold)),
+        style: FilledButton.styleFrom(
+          backgroundColor: _green,
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+      ),
     );
   }
 
