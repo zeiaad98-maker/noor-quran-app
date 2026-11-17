@@ -9,7 +9,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:noor_quran/data/audio_downloads.dart';
 import 'package:noor_quran/data/audio_player_controller.dart';
 import 'package:noor_quran/data/quran_audio.dart';
-import 'package:noor_quran/data/word_meanings.dart';
 import 'package:noor_quran/widgets/audio_player_sheet.dart';
 
 import 'fake_just_audio.dart';
@@ -18,19 +17,19 @@ import 'fake_just_audio.dart';
 /// per-word recording (wbw) — one fixed teaching voice, complete and
 /// clear by construction, exactly like the world apps.
 ///
-/// The mapping is the critical part: the wbw file number is NOT the
-/// word position — the wbw set numbers pause marks as positions of
-/// their own, and NO rule from our tokens reproduces it (verified
-/// against the Quran.com Verses API for all 6,236 ayahs: the
-/// pause-mark rule mismatched 5,519 words in 374 ayahs — e.g. 2:81
-/// word 1 carries U+06DA in our tokens but the API drops it, while
-/// 2:255 word 7 carries the SAME mark and it shifts; the ۞ rub el
-/// hizb counts as position 1 but never appears in our tokens). So
-/// the mapping is a bundled shift table
-/// (`assets/quran_data/word_wbw_shifts.json`, generated from the
-/// API's audio_urls by `tool/build_wbw_shifts.py`: 2,705 ayahs,
-/// 4,560 shift points, reconstruction 0 mismatches over 77,429
-/// words), and the file number is position + #{shifts < position}.
+/// v13.4 — THE MAPPING: the wbw file number IS the word position
+/// (1-based, among the ayah's audio words). Pause marks do NOT
+/// count as positions. v13.2/13.3 believed the opposite — the
+/// Quran.com API's audio_url field counts pause marks, and a
+/// bundled shift table reproduced the API faithfully (0 mismatches
+/// over 77,429 words). That verification was the mistake: it
+/// verified file NUMBERS against the API, never the files' spoken
+/// CONTENT. Transcription of the real files (2026-11-17, two ASR
+/// models, 39 words over 20 surahs) proved the FILES are numbered
+/// by word position only — e.g. 3:7 word 15 الَّذِينَ is file 015
+/// (the API claims 016, and 016 speaks فِي). The API field is
+/// wrong relative to its own files, so the shift table (and its
+/// generator) were deleted; there is no table any more.
 ///
 /// Fallback chain (v13.2, bug A): wbw (new CDN, then legacy host) →
 /// sheet error with retry. There is NO segment/ayah fallback any
@@ -42,7 +41,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final fake = installFakeJustAudio();
 
-  group('wbwFileNumberFromShifts — bundled shift table', () {
+  group('wbw file number IS the word position (v13.4)', () {
     test('URL builders: new CDN first, legacy host second', () {
       expect(wbwWordUrl(2, 33, 6),
           'https://audio.qurancdn.com/wbw/002_033_006.mp3');
@@ -52,71 +51,28 @@ void main() {
           'https://audio.qurancdn.com/wbw/001_001_001.mp3');
     });
 
-    test('pure function: shift points add one step each, only before',
-        () {
-      // 2:33 shifts [4]: words 1–4 are files 1–4, word 5 is 6.
-      expect(wbwFileNumberFromShifts([4], 1), 1);
-      expect(wbwFileNumberFromShifts([4], 4), 4);
-      expect(wbwFileNumberFromShifts([4], 5), 6);
-      expect(wbwFileNumberFromShifts([4], 22), 23);
-      // Leading ۞ (shift 0): even word 1 is shifted.
-      expect(wbwFileNumberFromShifts([0], 1), 2);
-      expect(wbwFileNumberFromShifts([0, 11], 12), 14);
-      // No shifts: file number == position.
-      expect(wbwFileNumberFromShifts([], 7), 7);
-    });
-
-    test('bundled table: 2:33 shifts [4] (the ۖ after word 4)',
-        () async {
-      expect(await wbwShiftsForAyah(2, 33), [4]);
-      expect(wbwFileNumberFromShifts([4], 5), 6,
-          reason: 'word 5 of 2:33 is file 006, not 005');
-    });
-
-    test('bundled table: 2:255 shifts (8 skips) match the API',
-        () async {
-      final shifts = await wbwShiftsForAyah(2, 255);
-      expect(shifts, [7, 12, 19, 26, 32, 40, 44, 47]);
-      final skipped = {8, 14, 22, 30, 37, 46, 51, 55};
-      final expected = [
-        for (var n = 1; n <= 58; n++) if (!skipped.contains(n)) n,
-      ];
-      final actual = [
-        for (var w = 1; w <= 50; w++)
-          wbwFileNumberFromShifts(shifts, w),
-      ];
-      expect(actual, expected);
-    });
-
-    test('bundled table: leading ۞ and the counter-examples', () async {
-      // 2:26 starts a hizb: the ۞ is position 1, word 1 is file 002.
-      final shifts26 = await wbwShiftsForAyah(2, 26);
-      expect(shifts26.first, 0);
-      expect(wbwFileNumberFromShifts(shifts26, 1), 2);
-      // 2:81: the ۚ on word 1 does NOT shift (API drops it) — the
-      // only shift is after word 10. A token-based rule gets this
-      // ayah wrong; the table gets it right.
-      expect(await wbwShiftsForAyah(2, 81), [10]);
-      expect(wbwFileNumberFromShifts([10], 1), 1);
-      expect(wbwFileNumberFromShifts([10], 11), 12);
-      // 36:52: the saktah pair adds one step after word 7 (word 7
-      // itself is file 007 — duration-verified, see
-      // tool/build_wbw_shifts.py).
-      expect(await wbwShiftsForAyah(36, 52), [7]);
-      expect(wbwFileNumberFromShifts([7], 7), 7);
-      expect(wbwFileNumberFromShifts([7], 8), 9);
-    });
-
-    test('bundled table: ayahs without shifts return empty', () async {
-      for (final (s, a) in [(1, 1), (2, 6), (112, 1)]) {
-        final shifts = await wbwShiftsForAyah(s, a);
-        expect(shifts, isEmpty);
-      }
-      final tokens = await QuranWordData.wordsForAyah(1, 1);
-      expect(tokens.length, 4);
-      for (var w = 1; w <= 4; w++) {
-        expect(wbwFileNumberFromShifts([], w), w);
-      }
+    test('file number == audio position, even after pause marks', () {
+      // The cases that were WRONG under the shift table (v13.2/13.3):
+      // 3:7 word 15 الَّذِينَ is file 015 (the API claims 016, and
+      // 016 speaks فِي); 2:255 word 48 is file 048 (API: 056);
+      // 2:26 word 1 is file 001 (API: 002); 2:81 word 11 is file
+      // 011 (API: 012). Proven by transcription of the real files
+      // (2026-11-17, two ASR models, 39 words over 20 surahs).
+      expect(wbwWordUrl(3, 7, 15),
+          'https://audio.qurancdn.com/wbw/003_007_015.mp3');
+      expect(wbwWordUrl(2, 255, 48),
+          'https://audio.qurancdn.com/wbw/002_255_048.mp3');
+      expect(wbwWordUrl(2, 26, 1),
+          'https://audio.qurancdn.com/wbw/002_026_001.mp3');
+      expect(wbwWordUrl(2, 81, 11),
+          'https://audio.qurancdn.com/wbw/002_081_011.mp3');
+      // Merged ayahs: the AUDIO position (not the display index)
+      // is the file number — 2:181 display 5 -> audio 4 -> 004.
+      expect(audioPositionForQcfWord(2, 181, 5), 4);
+      expect(wbwWordUrl(2, 181, audioPositionForQcfWord(2, 181, 5)),
+          'https://audio.qurancdn.com/wbw/002_181_004.mp3');
+      expect(wbwWordUrl(37, 130, audioPositionForQcfWord(37, 130, 4)),
+          'https://audio.qurancdn.com/wbw/037_130_003.mp3');
     });
   });
 
@@ -201,7 +157,7 @@ void main() {
       await Future<void>.delayed(Duration(milliseconds: ms));
     }
 
-    test('word 5 of 2:33 plays wbw file 006, not 005', () async {
+    test('word 5 of 2:33 plays wbw file 005 (v13.4)', () async {
       fake.autoFinish = false;
       controller.reciterIndex = 12; // خليفة الطنيجي (default)
       controller.queue = [(2, 33)];
@@ -212,7 +168,7 @@ void main() {
 
       expect(fake.loadCount, 1, reason: 'one play attempted');
       expect(fake.loadUris.single,
-          'https://audio.qurancdn.com/wbw/002_033_006.mp3');
+          'https://audio.qurancdn.com/wbw/002_033_005.mp3');
       expect(controller.wordUsesWbw, isTrue);
       expect(controller.lastError, isNull);
     });
@@ -305,7 +261,7 @@ void main() {
       expect(controller.wordIndex, 5, reason: 'still the same word');
       expect(
           fake.loadUris.every(
-              (u) => u == 'https://audio.qurancdn.com/wbw/002_033_006.mp3'),
+              (u) => u == 'https://audio.qurancdn.com/wbw/002_033_005.mp3'),
           isTrue,
           reason: 'every replay is the same wbw file');
       await settle();
