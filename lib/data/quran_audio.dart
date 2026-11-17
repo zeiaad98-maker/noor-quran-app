@@ -1,10 +1,7 @@
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:quran/quran.dart' as quran;
-import 'package:shared_preferences/shared_preferences.dart';
 
 /// One reciter, with every audio source the player needs.
 ///
@@ -13,12 +10,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// [everyayah] is the per-ayah folder on everyayah.com, used for the
 /// ayah / page / surah scopes and for repetition.
 /// [quranComRecitationId] / [quranComAudioPrefix] are only set when
-/// Quran.com API v4 carries this reciter: they power per-word audio
-/// (timed segments inside the reciter's own ayah recording). Reciters
-/// without them get their word audio in محمود الحصري's voice first
-/// (v13.1 — the user's decision 2026-11-17: his own real voice,
-/// clear and complete); the fixed wbw recording is only the last
-/// resort when the Husary file cannot be fetched either.
+/// Quran.com API v4 carries this reciter. Word audio does NOT use
+/// them: since v13.2 the word always plays from Quran.com's dedicated
+/// per-word recording (wbw — one fixed teaching voice), never cut
+/// from an ayah file (v13.1's segment path is gone: a tap on a word
+/// played the whole ayah whenever the seek failed).
 ///
 /// Every URL in this list was verified with curl before it was added
 /// (mp3quran `001.mp3` -> 200 audio/mpeg, everyayah `001001.mp3` -> 200).
@@ -166,21 +162,91 @@ String? quranComAyahUrl(Reciter reciter, int surah, int ayah) {
 }
 
 /// Word-by-word recording from Quran.com (one fixed voice, works for
-/// every word of every ayah). LAST resort for word audio only: when
-/// neither the selected reciter nor الحصري can supply the word (no
-/// segments, or the ayah file cannot be fetched).
-String wbwWordUrl(int surah, int ayah, int wordIndex) =>
+/// every word of every ayah). [fileNumber] is the wbw FILE number —
+/// see [wbwFileNumberFromShifts]: it is NOT the word position, the
+/// wbw set numbers pause marks as positions of their own. Primary
+/// host is Quran.com's current CDN (audio.qurancdn.com, per
+/// api-docs); [wbwWordUrlLegacy] is the old host, tried only if the
+/// new one fails.
+String wbwWordUrl(int surah, int ayah, int fileNumber) =>
+    'https://audio.qurancdn.com/wbw/'
+    '${surah.toString().padLeft(3, '0')}_'
+    '${ayah.toString().padLeft(3, '0')}_'
+    '${fileNumber.toString().padLeft(3, '0')}.mp3';
+
+/// Legacy host for the wbw recording (verses.quran.com) — fallback
+/// only, when audio.qurancdn.com fails.
+String wbwWordUrlLegacy(int surah, int ayah, int fileNumber) =>
     'https://verses.quran.com/wbw/'
     '${surah.toString().padLeft(3, '0')}_'
     '${ayah.toString().padLeft(3, '0')}_'
-    '${wordIndex.toString().padLeft(3, '0')}.mp3';
+    '${fileNumber.toString().padLeft(3, '0')}.mp3';
 
-/// Timed span of one word inside its ayah recording, in milliseconds.
-class WordSegment {
-  final int startMs;
-  final int endMs;
-  const WordSegment(this.startMs, this.endMs);
+/// The wbw FILE number of a word (1-based), from the ayah's SHIFT
+/// points: a sorted list of word positions AFTER which the file
+/// numbering increments by one extra step (0 = before word 1, i.e.
+/// a leading ۞ rub el hizb). file(word i) = i + #{shifts < i}.
+/// Pure, pinned by unit tests against the API's real audio_url
+/// values (2:33 → [4], 2:255 → 8 shifts, 2:26 → leading 0, 2:81 →
+/// [10], 36:52 → [7]).
+///
+/// WHY A TABLE, NOT A RULE (v13.2): no rule computable from our
+/// tokens reproduces the numbering — verified live against the
+/// Quran.com Verses API for all 6,236 ayahs (77,429 words,
+/// tool/verify_wbw_mapping.py found 5,519 mismatches for the
+/// pause-mark rule):
+///   * pause marks count as positions — but WHICH marks count is
+///     inconsistent in the API text (2:81 word 1 carries U+06DA in
+///     our tokens and the API drops it, no shift; 2:255 word 7
+///     carries the SAME mark and it shifts by 1);
+///   * two marks on one word add only ONE step (7:69 word 22,
+///     36:52 word 6);
+///   * the rub el hizb ornament U+06DE (۞) counts as position 1
+///     (2:26 word 1 is file 002) but never appears in our tokens.
+/// So the shifts live in a bundled table,
+/// `assets/quran_data/word_wbw_shifts.json`, generated from the
+/// API's audio_urls by `tool/build_wbw_shifts.py` (2,705 ayahs,
+/// 4,560 shift points, 38 KB; reconstruction against the API:
+/// 0 mismatches). Ayahs absent from the table have no shifts.
+int wbwFileNumberFromShifts(List<int> shifts, int wordIndex) {
+  var shift = 0;
+  for (final s in shifts) {
+    if (s < wordIndex) shift++;
+  }
+  return wordIndex + shift;
 }
+
+/// Bundled wbw shift table for the whole Mushaf (see
+/// [wbwFileNumberFromShifts]). Loaded once, cached for the session.
+Map<String, dynamic>? _bundledWbwShifts;
+Future<void>? _bundledWbwShiftsFuture;
+
+Future<void> _ensureBundledWbwShifts() async {
+  _bundledWbwShiftsFuture ??= rootBundle
+      .loadString('assets/quran_data/word_wbw_shifts.json')
+      .then((raw) {
+    _bundledWbwShifts = jsonDecode(raw) as Map<String, dynamic>;
+  });
+  return _bundledWbwShiftsFuture!;
+}
+
+/// Shift points of one ayah (`"s:a"` key), or an empty list when
+/// the ayah has none (file number == word position). Never throws:
+/// a missing/corrupt bundle means "no shifts", and the caller then
+/// reports the error (the word has no other audio path since v13.2).
+Future<List<int>> wbwShiftsForAyah(int surah, int ayah) async {
+  try {
+    await _ensureBundledWbwShifts();
+    final raw = _bundledWbwShifts?['$surah:$ayah'];
+    if (raw is List) {
+      return raw.map((e) => (e as num).toInt()).toList();
+    }
+  } catch (_) {
+    // Bundle unreadable — treat as no shifts (see doc above).
+  }
+  return const [];
+}
+
 
 /// Default reciter (v13): خليفة الطنيجي (index 12 in [reciters]).
 /// The user asked for him by name — the current default's pronunciation
@@ -196,201 +262,41 @@ int resolveDefaultReciterIndex(int? stored) {
   return stored.clamp(0, reciters.length - 1);
 }
 
-/// The reciter whose voice WORD playback uses (v13.1 — the user's
-/// decision, Tue 2026-11-17): the selected reciter when Quran.com
-/// carries it (it has per-word segments), otherwise محمود الحصري
-/// (index 0) — his own real voice, clear and complete — instead of
-/// the fixed wbw voice. Pure, so it is pinned by unit tests.
-///
-/// The AYAH scope is untouched: ayah / page / surah playback always
-/// uses the SELECTED reciter (الطنيجي by default). Only the word
-/// scope goes through this function.
-///
-/// Affected (no segments → Husary): ماهر المعيقلي (4)، علي الحذيفي
-/// (5)، أيمن سويد (7)، إبراهيم الأخضر (11)، خليفة الطنيجي (12)،
-/// ياسر الدوسري (14). The other 9 keep their own voice.
-int wordVoiceReciterIndex(int selectedIndex) {
-  final clamped = selectedIndex.clamp(0, reciters.length - 1);
-  final selected = reciters[clamped];
-  return selected.quranComRecitationId != null ? clamped : 0;
-}
-/// for some (verified live 2026-11-17: Sudais / recitation 3 returns
-/// `["0", "1", "50", "570"]` for 2:33) — a bare `as int` throws and
-/// the whole ayah falls back to the wbw voice. Coerce both shapes.
-int _segmentInt(dynamic value) {
-  if (value is int) return value;
-  if (value is String) return int.tryParse(value) ?? -1;
-  if (value is num) return value.toInt();
-  return -1;
-}
+/// Ayahs where the DISPLAY word list (QCF / Mushaf text) and the
+/// AUDIO word list (Quran.com API / wbw files / morphology) disagree:
+/// two display words are ONE audio word (one wbw file, one API word
+/// entry). Verified live 2026-11-17 (API words + wbw 404 probe for
+/// 37:130 file 004) and against the bundled morphology (QCF count =
+/// token count + 1 in exactly these 4 ayahs, equal everywhere else):
+///   * 2:181, 8:6, 13:37 — بَعۡدَ مَا is two display words, one audio
+///     word (API word 3 = 'بَعْدَ مَا', wbw file 003 covers both);
+///   * 37:130 — إِلۡ يَاسِينَ is two display words, one audio word
+///     (API word 3 = 'إِلْ يَاسِينَ', wbw file 003 covers both; file
+///     004 does not exist).
+/// Keyed by ayah, value = the two 0-based DISPLAY word indices that
+/// share one audio word. Every other ayah: display index == audio
+/// index, no translation needed.
+const Map<String, List<int>> _mergedAudioWords = {
+  '2:181': [2, 3],
+  '8:6': [3, 4],
+  '13:37': [7, 8],
+  '37:130': [2, 3],
+};
 
-/// Parses a Quran.com API v4 verse object into its ordered word
-/// segments (index 0 = first word). Pure function, so it can be
-/// tested against a canned real response.
-///
-/// The API shape (verified live 2026-11-16, verse 2:33, recitation 6):
-/// `verse.audio.segments` is a list of `[wordIndex0, wordIndex1,
-/// startMs, endMs]`, e.g. `[0, 1, 850, 1760]`. Returns null when the
-/// shape is missing or incomplete (a segment index with no entry).
-List<WordSegment>? parseWordSegments(Map<String, dynamic> verseJson) {
-  final audio = verseJson['audio'] as Map<String, dynamic>?;
-  final segments = audio?['segments'] as List<dynamic>?;
-  if (segments == null || segments.isEmpty) return null;
-  // Each segment is [wordIndex0, wordIndex1, startMs, endMs].
-  final byIndex = <int, WordSegment>{};
-  for (final raw in segments) {
-    final seg = raw as List<dynamic>;
-    if (seg.length >= 4) {
-      final index = _segmentInt(seg[0]);
-      final start = _segmentInt(seg[2]);
-      final end = _segmentInt(seg[3]);
-      // A malformed entry is skipped: the contiguity check below
-      // then returns null (wbw fallback) instead of a wrong window.
-      if (index < 0 || start < 0 || end <= start) continue;
-      byIndex[index] = WordSegment(start, end);
-    }
-  }
-  if (byIndex.isEmpty) return null;
-  final ordered = <WordSegment>[];
-  for (var i = 0; i < byIndex.length; i++) {
-    final s = byIndex[i];
-    if (s == null) return null;
-    ordered.add(s);
-  }
-  return ordered;
-}
-
-/// Per-word timestamps of one ayah from Quran.com API v4
-/// (`/verses/by_key/{s}:{a}?audio={recitationId}`), in the reciter's
-/// own voice. Returns the segments in word order (index 0 = first
-/// word), or null when the reciter has no Quran.com recitation or the
-/// request fails.
-Future<List<WordSegment>?> fetchWordSegments(
-  Reciter reciter,
-  int surah,
-  int ayah,
-) async {
-  final recitationId = reciter.quranComRecitationId;
-  if (recitationId == null) return null;
-  try {
-    final uri = Uri.parse(
-      'https://api.quran.com/api/v4/verses/by_key/$surah:$ayah'
-      '?language=ar&words=false&audio=$recitationId&fields=text_uthmani',
-    );
-    final response = await http.get(uri).timeout(const Duration(seconds: 15));
-    if (response.statusCode != 200) return null;
-    final verse = (jsonDecode(response.body) as Map<String, dynamic>)['verse']
-        as Map<String, dynamic>?;
-    if (verse == null) return null;
-    return parseWordSegments(verse);
-  } catch (_) {
-    return null;
-  }
-}
-
-// -- Word-segment resolution (word audio, no per-tap API wait) --------
-//
-// Root cause of the v9 word-audio failure on a weak connection: every
-// word tap first waited on api.quran.com (Cloudflare — the only
-// non-BunnyCDN host in the audio path, 15 s timeout, no cache, no
-// timeout on the setUrl that follows), then streamed the whole
-// 408 KB ayah file before a late word could sound. Resolution order
-// below makes the common path (Husary, recitation 6) fully offline:
-//   1. bundled asset for Husary — never touches the network;
-//   2. SharedPreferences cache for the other segment reciters
-//      (one API call per ayah, ever);
-//   3. the API, cached on success.
-// A reciter without segments never reaches this function for its
-// own voice: the controller resolves the word voice first
-// (wordVoiceReciterIndex — Husary), so this is only called for a
-// reciter that HAS segments. Anything without segments here falls
-// back to wbw in the controller, exactly as a failed API call would.
-
-/// Bundled Husary (recitation 6) segments for the whole Mushaf:
-/// `assets/quran_data/word_segments_husary.json`, generated from the
-/// live API by `tool/fetch_husary_word_segments.py`
-/// (`{"2:33": [[850, 1760], ...], ...}`, 6218 ayahs / 77,098 words).
-/// 18 ayahs are absent: the API skips a word index there (e.g. 2:125
-/// jumps from index 16 to 18), so no contiguous segment list exists —
-/// those ayahs fall back to wbw, exactly as a failed API call would.
-Map<String, dynamic>? _bundledHusary;
-Future<void>? _bundledHusaryFuture;
-
-Future<void> _ensureBundledHusary() async {
-  _bundledHusaryFuture ??= rootBundle
-      .loadString('assets/quran_data/word_segments_husary.json')
-      .then((raw) {
-    _bundledHusary = jsonDecode(raw) as Map<String, dynamic>;
-  });
-  return _bundledHusaryFuture!;
-}
-
-/// Segments of one ayah from the bundled Husary asset, or null when
-/// the ayah is one of the 28 without a contiguous list. Pure parsing
-/// of a decoded pair list, so tests can inject a fake bundle.
-List<WordSegment>? parseStoredSegments(List<dynamic> pairs) {
-  final out = <WordSegment>[];
-  var prevStart = -1;
-  for (final raw in pairs) {
-    final pair = raw as List<dynamic>;
-    if (pair.length < 2) return null;
-    final start = pair[0] as int;
-    final end = pair[1] as int;
-    // Starts must not go backwards. Overlapping spans ARE allowed:
-    // a segment spanning several words is stored once per word it
-    // covers (e.g. 2:125 has [34280, 37290] twice), so start can
-    // equal — but never fall below — the previous start.
-    if (start < 0 || end <= start || start < prevStart) return null;
-    out.add(WordSegment(start, end));
-    prevStart = start;
-  }
-  return out.isEmpty ? null : out;
-}
-
-/// Test seam: replace the bundled Husary map (and reset the loader).
-@visibleForTesting
-void setBundledHusaryForTest(Map<String, dynamic>? bundle) {
-  _bundledHusary = bundle;
-  _bundledHusaryFuture = bundle == null ? null : Future<void>.value();
-}
-
-Future<List<WordSegment>?> bundledWordSegments(int surah, int ayah) async {
-  await _ensureBundledHusary();
-  final raw = _bundledHusary!['$surah:$ayah'] as List<dynamic>?;
-  if (raw == null) return null;
-  return parseStoredSegments(raw);
-}
-
-/// Cheapest-first segment resolution for one ayah (see above).
-/// Never throws: every failure degrades to null (wbw fallback).
-Future<List<WordSegment>?> wordSegmentsFor(
-    Reciter reciter, int surah, int ayah) async {
-  final recitationId = reciter.quranComRecitationId;
-  if (recitationId == null) return null;
-  if (recitationId == 6) return bundledWordSegments(surah, ayah);
-  final key = 'word_segments_${recitationId}_$surah:$ayah';
-  try {
-    final prefs = await SharedPreferences.getInstance();
-    final cached = prefs.getString(key);
-    if (cached != null) {
-      final stored = jsonDecode(cached) as List<dynamic>;
-      final segments = parseStoredSegments(stored);
-      if (segments != null) return segments;
-      await prefs.remove(key);
-    }
-    final segments = await fetchWordSegments(reciter, surah, ayah);
-    if (segments != null) {
-      await prefs.setString(
-        key,
-        jsonEncode([
-          for (final s in segments) [s.startMs, s.endMs],
-        ]),
-      );
-    }
-    return segments;
-  } catch (_) {
-    return null;
-  }
+/// The AUDIO word position (1-based, Quran.com / wbw numbering) of a
+/// DISPLAY word tap: [qcfWord] is the 1-based QCF word index (the
+/// index the reader reports for the tapped glyph). In the 4 merged
+/// ayahs above, both halves of the pair map to the ONE shared audio
+/// position, and every word after the pair shifts down by one —
+/// without this, tapping a word after the pair plays the NEXT word's
+/// file (the v9 word-chip bug, re-found in v13.2). Pure, pinned by
+/// unit tests (2:181 word 5 → 4, 37:130 word 4 → 3).
+int audioPositionForQcfWord(int surah, int ayah, int qcfWord) {
+  final pair = _mergedAudioWords['$surah:$ayah'];
+  if (pair == null) return qcfWord;
+  if (qcfWord <= pair[0] + 1) return qcfWord;
+  if (qcfWord <= pair[1] + 1) return pair[0] + 1;
+  return qcfWord - 1;
 }
 
 /// All (surah, ayah) pairs on one Mushaf page, in reading order.
