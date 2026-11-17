@@ -650,21 +650,20 @@ class AudioPlayerController extends ChangeNotifier {
   /// ONLY on success.
   ///
   /// [qcfWord] is the 1-based QCF position (the reader's tap index);
-  /// [audioPositionForQcfWord] translates it to the wbw numbering
-  /// (in the 4 merged ayahs the two differ).
+  /// [audioPositionForQcfWord] translates it to the audio word
+  /// position (in the 4 merged ayahs the two differ) — which IS
+  /// the wbw file number (v13.4, no shift table).
   Future<bool> _playWbwWord(int token, (int, int) ayah, int qcfWord) async {
     final tokens = await QuranWordData.wordsForAyah(ayah.$1, ayah.$2);
     if (token != _playToken || _disposed) return false;
     final audioPos = audioPositionForQcfWord(ayah.$1, ayah.$2, qcfWord);
     if (audioPos < 1 || audioPos > tokens.length) return false;
-    // The wbw file number is NOT the word position: the wbw set
-    // numbers pause marks as positions of their own, and no rule
-    // from our tokens reproduces it — the shift table (bundled,
-    // derived from the API's audio_urls) is the ground truth (see
-    // [wbwFileNumberFromShifts]).
-    final shifts = await wbwShiftsForAyah(ayah.$1, ayah.$2);
-    if (token != _playToken || _disposed) return false;
-    final fileNumber = wbwFileNumberFromShifts(shifts, audioPos);
+    // v13.4: the wbw file number IS the audio position — the files
+    // are numbered by word position only (pause marks do not count;
+    // the Quran.com API's audio_url counts them and is wrong
+    // relative to its own files — proven by transcription). No
+    // shift table any more: it encoded the API's wrong numbers.
+    final fileNumber = audioPos;
     final wbwLocal = await downloads?.cacheWbwFile(
       ayah.$1,
       ayah.$2,

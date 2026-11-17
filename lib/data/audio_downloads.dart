@@ -143,8 +143,14 @@ class AudioDownloadService extends ChangeNotifier {
   /// Cache-on-play (v13) for one wbw word file (the small per-word
   /// recording, ~25–140 KB). Same guarantees as [cacheAyahFile]:
   /// downloaded once, played from disk after that. [fileNumber] is
-  /// the wbw FILE number (see [wbwFileNumberFromShifts]) — it is also
-  /// the cache key, so one cached file serves one wbw recording.
+  /// the word's 1-based position among the ayah's audio words
+  /// (v13.4 — the wbw file number IS the word position) — it is
+  /// also the cache key, so one cached file serves one wbw
+  /// recording. The cache is self-consistent across the v13.4
+  /// change: keys are file numbers, and a file's content matches
+  /// its number, so a file cached under the old (shifted) number
+  /// is still the right recording for the word that now asks for
+  /// that number. No purge needed.
   /// Tries the current CDN first, then the legacy host (v13.2).
   /// Each host is fetched by [_fetchToFile] (streamed, stall timeout
   /// only, resume + retry — v13.3): a slow connection still gets

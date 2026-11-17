@@ -1,6 +1,3 @@
-import 'dart:convert';
-
-import 'package:flutter/services.dart';
 import 'package:quran/quran.dart' as quran;
 
 /// One reciter, with every audio source the player needs.
@@ -162,12 +159,15 @@ String? quranComAyahUrl(Reciter reciter, int surah, int ayah) {
 }
 
 /// Word-by-word recording from Quran.com (one fixed voice, works for
-/// every word of every ayah). [fileNumber] is the wbw FILE number —
-/// see [wbwFileNumberFromShifts]: it is NOT the word position, the
-/// wbw set numbers pause marks as positions of their own. Primary
-/// host is Quran.com's current CDN (audio.qurancdn.com, per
-/// api-docs); [wbwWordUrlLegacy] is the old host, tried only if the
-/// new one fails.
+/// every word of every ayah). [fileNumber] IS the word's 1-based
+/// position among the ayah's audio words — the wbw files are
+/// numbered by word position only (v13.4): pause marks (ۖ ۗ etc.)
+/// do NOT count as positions, whatever the Quran.com API's
+/// audio_url field says (it counts them — proven by transcription
+/// 2026-11-17: 3:7 word 15 الَّذِينَ is file 015, the API claims
+/// 016, and 016 speaks فِي). Primary host is Quran.com's current
+/// CDN (audio.qurancdn.com, per api-docs); [wbwWordUrlLegacy] is
+/// the old host, tried only if the new one fails.
 String wbwWordUrl(int surah, int ayah, int fileNumber) =>
     'https://audio.qurancdn.com/wbw/'
     '${surah.toString().padLeft(3, '0')}_'
@@ -182,70 +182,16 @@ String wbwWordUrlLegacy(int surah, int ayah, int fileNumber) =>
     '${ayah.toString().padLeft(3, '0')}_'
     '${fileNumber.toString().padLeft(3, '0')}.mp3';
 
-/// The wbw FILE number of a word (1-based), from the ayah's SHIFT
-/// points: a sorted list of word positions AFTER which the file
-/// numbering increments by one extra step (0 = before word 1, i.e.
-/// a leading ۞ rub el hizb). file(word i) = i + #{shifts < i}.
-/// Pure, pinned by unit tests against the API's real audio_url
-/// values (2:33 → [4], 2:255 → 8 shifts, 2:26 → leading 0, 2:81 →
-/// [10], 36:52 → [7]).
-///
-/// WHY A TABLE, NOT A RULE (v13.2): no rule computable from our
-/// tokens reproduces the numbering — verified live against the
-/// Quran.com Verses API for all 6,236 ayahs (77,429 words,
-/// tool/verify_wbw_mapping.py found 5,519 mismatches for the
-/// pause-mark rule):
-///   * pause marks count as positions — but WHICH marks count is
-///     inconsistent in the API text (2:81 word 1 carries U+06DA in
-///     our tokens and the API drops it, no shift; 2:255 word 7
-///     carries the SAME mark and it shifts by 1);
-///   * two marks on one word add only ONE step (7:69 word 22,
-///     36:52 word 6);
-///   * the rub el hizb ornament U+06DE (۞) counts as position 1
-///     (2:26 word 1 is file 002) but never appears in our tokens.
-/// So the shifts live in a bundled table,
-/// `assets/quran_data/word_wbw_shifts.json`, generated from the
-/// API's audio_urls by `tool/build_wbw_shifts.py` (2,705 ayahs,
-/// 4,560 shift points, 38 KB; reconstruction against the API:
-/// 0 mismatches). Ayahs absent from the table have no shifts.
-int wbwFileNumberFromShifts(List<int> shifts, int wordIndex) {
-  var shift = 0;
-  for (final s in shifts) {
-    if (s < wordIndex) shift++;
-  }
-  return wordIndex + shift;
-}
-
-/// Bundled wbw shift table for the whole Mushaf (see
-/// [wbwFileNumberFromShifts]). Loaded once, cached for the session.
-Map<String, dynamic>? _bundledWbwShifts;
-Future<void>? _bundledWbwShiftsFuture;
-
-Future<void> _ensureBundledWbwShifts() async {
-  _bundledWbwShiftsFuture ??= rootBundle
-      .loadString('assets/quran_data/word_wbw_shifts.json')
-      .then((raw) {
-    _bundledWbwShifts = jsonDecode(raw) as Map<String, dynamic>;
-  });
-  return _bundledWbwShiftsFuture!;
-}
-
-/// Shift points of one ayah (`"s:a"` key), or an empty list when
-/// the ayah has none (file number == word position). Never throws:
-/// a missing/corrupt bundle means "no shifts", and the caller then
-/// reports the error (the word has no other audio path since v13.2).
-Future<List<int>> wbwShiftsForAyah(int surah, int ayah) async {
-  try {
-    await _ensureBundledWbwShifts();
-    final raw = _bundledWbwShifts?['$surah:$ayah'];
-    if (raw is List) {
-      return raw.map((e) => (e as num).toInt()).toList();
-    }
-  } catch (_) {
-    // Bundle unreadable — treat as no shifts (see doc above).
-  }
-  return const [];
-}
+/// v13.4 — the wbw shift table is DELETED, on purpose. It encoded
+/// the Quran.com API's audio_url numbering, which counts pause
+/// marks as positions; transcription of the real files (2026-11-17,
+/// two ASR models in agreement, then a 28-word cross-surah check)
+/// proved the FILES are numbered by word position only — file N
+/// speaks word N. The API field is wrong relative to its own
+/// files, so any table derived from it is wrong too. The wbw file
+/// number of a word is its 1-based position among the ayah's
+/// audio words ([audioPositionForQcfWord]); no table, no lookup,
+/// nothing to go stale.
 
 
 /// Default reciter (v13): خليفة الطنيجي (index 12 in [reciters]).
@@ -283,14 +229,16 @@ const Map<String, List<int>> _mergedAudioWords = {
   '37:130': [2, 3],
 };
 
-/// The AUDIO word position (1-based, Quran.com / wbw numbering) of a
-/// DISPLAY word tap: [qcfWord] is the 1-based QCF word index (the
-/// index the reader reports for the tapped glyph). In the 4 merged
-/// ayahs above, both halves of the pair map to the ONE shared audio
-/// position, and every word after the pair shifts down by one —
-/// without this, tapping a word after the pair plays the NEXT word's
-/// file (the v9 word-chip bug, re-found in v13.2). Pure, pinned by
-/// unit tests (2:181 word 5 → 4, 37:130 word 4 → 3).
+/// The AUDIO word position (1-based, position among the ayah's
+/// audio words) of a DISPLAY word tap: [qcfWord] is the 1-based QCF
+/// word index (the index the reader reports for the tapped glyph).
+/// This position IS the wbw file number (v13.4 — no shift is
+/// applied). In the 4 merged ayahs above, both halves of the pair
+/// map to the ONE shared audio position, and every word after the
+/// pair shifts down by one — without this, tapping a word after the
+/// pair plays the NEXT word's file (the v9 word-chip bug, re-found
+/// in v13.2). Pure, pinned by unit tests (2:181 word 5 → 4,
+/// 37:130 word 4 → 3).
 int audioPositionForQcfWord(int surah, int ayah, int qcfWord) {
   final pair = _mergedAudioWords['$surah:$ayah'];
   if (pair == null) return qcfWord;
