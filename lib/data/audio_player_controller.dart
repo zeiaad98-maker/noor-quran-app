@@ -52,6 +52,11 @@ class AudioPlayerController extends ChangeNotifier {
   /// 0 = endless, otherwise the number of plays.
   int repeatCount = 3;
   double speed = 1.0;
+
+  /// Whether tapping a word plays it immediately (v13.6, the word
+  /// card's gear settings). Default true — the behaviour since v13.2.
+  /// When false, a tap opens the card only; the green ▶ plays it.
+  bool wordAutoPlay = true;
   int fromPage = 1;
   int toPage = 1;
 
@@ -120,6 +125,7 @@ class AudioPlayerController extends ChangeNotifier {
   static const String _repeatScopeKey = 'audio_repeat_scope';
   static const String _repeatCountKey = 'audio_repeat_count';
   static const String _speedKey = 'audio_speed';
+  static const String _wordAutoPlayKey = 'word_autoplay';
 
   /// Plays remaining for the CURRENT item while [repeatItem] is on,
   /// counting the play in progress (so "3" at the start of play 1,
@@ -194,6 +200,7 @@ class AudioPlayerController extends ChangeNotifier {
     repeatScope = prefs.getBool(_repeatScopeKey) ?? false;
     repeatCount = prefs.getInt(_repeatCountKey) ?? 3;
     speed = prefs.getDouble(_speedKey) ?? 1.0;
+    wordAutoPlay = prefs.getBool(_wordAutoPlayKey) ?? true;
     notifyListeners();
   }
 
@@ -203,6 +210,15 @@ class AudioPlayerController extends ChangeNotifier {
     await prefs.setBool(_repeatScopeKey, repeatScope);
     await prefs.setInt(_repeatCountKey, repeatCount);
     await prefs.setDouble(_speedKey, speed);
+    await prefs.setBool(_wordAutoPlayKey, wordAutoPlay);
+  }
+
+  /// Word-card gear setting (v13.6): tapping a word plays it at once
+  /// (true, the default) or only opens the card (false).
+  void setWordAutoPlay(bool value) {
+    wordAutoPlay = value;
+    notifyListeners();
+    unawaited(_persistPlaybackSettings());
   }
 
   /// Sets the reciter without playing or persisting (initial restore).
@@ -281,6 +297,16 @@ class AudioPlayerController extends ChangeNotifier {
     await _playCurrent();
   }
 
+  /// The word card's repeat button (v13.6): plays JUST this word
+  /// [repeatCount] times (the count the user picked in the word
+  /// settings; if it is 1 — "play once" — repeat 3 times, the
+  /// default, so the button always repeats). Reuses [setRepeatCount]
+  /// so the repeat flags and persistence follow the pinned path.
+  Future<void> repeatWord(int surah, int ayah, int word) async {
+    setRepeatCount(repeatCount == 1 ? 3 : repeatCount);
+    await playWord(surah, ayah, word);
+  }
+
   Future<void> playAyah(int surah, int ayah) async {
     scope = PlayerScope.ayah;
     queue = [(surah, ayah)];
@@ -304,6 +330,23 @@ class AudioPlayerController extends ChangeNotifier {
   Future<void> playSurah(int surah) async {
     scope = PlayerScope.surah;
     queue = ayahsOfSurah(surah);
+    queueIndex = 0;
+    wordIndex = null;
+    _scopePlays = 1;
+    await _playCurrent();
+  }
+
+  /// استمرار (v13.6, the word card's "continue" button): play the
+  /// surah from THIS ayah onward, in Mushaf order — the recitation
+  /// continues past the ayah instead of stopping at it (the ayah
+  /// scope repeats one ayah; the surah scope starts at ayah 1).
+  /// At the last ayah the queue is just that ayah, so it behaves
+  /// like playAyah there.
+  Future<void> playFromAyah(int surah, int ayah) async {
+    scope = PlayerScope.surah;
+    final all = ayahsOfSurah(surah);
+    final start = all.indexWhere((a) => a.$1 == surah && a.$2 == ayah);
+    queue = start < 0 ? [(surah, ayah)] : all.sublist(start);
     queueIndex = 0;
     wordIndex = null;
     _scopePlays = 1;
@@ -678,30 +721,15 @@ class AudioPlayerController extends ChangeNotifier {
       _finishToken = token;
       return true;
     }
-    // No cached file (or a corrupt one): stream, new CDN first,
-    // legacy host second, SurahPedia third (v13.5 — a different
-    // host, for when the Quran.com hosts are unreachable).
-    if (await _loadAndPlay(
-        wbwWordUrl(ayah.$1, ayah.$2, fileNumber), Duration.zero, token)) {
-      wordUsesWbw = true;
-      _finishToken = token;
-      return true;
-    }
-    if (await _loadAndPlay(
-        wbwWordUrlLegacy(ayah.$1, ayah.$2, fileNumber),
-        Duration.zero,
-        token)) {
-      wordUsesWbw = true;
-      _finishToken = token;
-      return true;
-    }
-    if (await _loadAndPlay(
-        wbwWordUrlSurahPedia(ayah.$1, ayah.$2, fileNumber),
-        Duration.zero,
-        token)) {
-      wordUsesWbw = true;
-      _finishToken = token;
-      return true;
+    // No cached file (or a corrupt one): stream, in the same order
+    // as the cache path — SurahPedia first (v13.6), then the Quran.com
+    // CDN, then the legacy host ([wbwWordUrlsInOrder]).
+    for (final url in wbwWordUrlsInOrder(ayah.$1, ayah.$2, fileNumber)) {
+      if (await _loadAndPlay(url, Duration.zero, token)) {
+        wordUsesWbw = true;
+        _finishToken = token;
+        return true;
+      }
     }
     return false;
   }
