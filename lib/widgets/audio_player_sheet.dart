@@ -512,7 +512,7 @@ class AudioPlayerSheet extends StatelessWidget {
     final ayah = controller.currentAyah;
     if (ayah == null || controller.wordIndex == null) {
       return Text(
-        'لتشغيل كلمة مفردة: اضغط على أي آية في المصحف، ثم اضغط على الكلمة في شيت الآية.',
+        'لتشغيل كلمة مفردة: اضغط على الكلمة في المصحف.',
         textAlign: TextAlign.center,
         style: GoogleFonts.amiri(fontSize: 15, color: Colors.grey),
       );
