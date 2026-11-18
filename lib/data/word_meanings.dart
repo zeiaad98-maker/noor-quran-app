@@ -3,12 +3,20 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:quran/quran.dart' as quran;
 
+import 'qcf_word_map.dart';
+
 /// Offline Quran word data (Quranpedia dumps, bundled under assets/quran_data):
 /// - word meanings (غريب القرآن — السراج في بيان غريب القرآن، مع التبيان كبديل)
 /// - Tafsir Center word meanings (v13.11, the user's pick — «ضيف معاني
 ///   مركز تفسير»): the Center's own word-by-word compilation, CC BY 4.0,
 ///   FIRST meaning source, shown in FULL (never shortened) — it covers
 ///   100% of words, so the older sources below are fallback-only.
+/// - Tafsir Center per-word sarf + per-word i'rab (v13.11, his order
+///   «ضيف الصرف والإعراب هلأ مع هالنسخة»): the same dataset/licence,
+///   FIRST source for the التصريف/الإعراب tabs, shown in FULL (never
+///   shortened) — 100% coverage, so the simplified morphology below is
+///   fallback-only. Whole-ayah i'rab is NOT bundled (new feature
+///   needing design — later version).
 /// - short in-ayah glosses (مخلوف «كلمات القرآن: تفسير وبيان»، v13.6)
 ///   + small additions condensed from التفسير الميسر where مخلوف has
 ///   none (e.g. 4:4 فَكُلُوهُ = «فخذوه حلالاً.») — fallback-only since
@@ -23,6 +31,8 @@ import 'package:quran/quran.dart' as quran;
 class QuranWordData {
   static Map<String, dynamic>? _meanings;
   static Map<String, dynamic>? _tafsirCenter;
+  static Map<String, dynamic>? _sarfTC;
+  static Map<String, dynamic>? _irabTC;
   static Map<String, dynamic>? _makhloof;
   static Map<String, dynamic>? _additions;
   static Map<String, dynamic>? _lexicon;
@@ -57,6 +67,13 @@ class QuranWordData {
     // loaded like غريب القرآن (required, not optional).
     final tafsirCenterRaw = await rootBundle
         .loadString('assets/quran_data/word_meanings_tafsircenter.json');
+    // Tafsir Center per-word sarf + per-word i'rab (v13.11) — the
+    // primary source for the التصريف/الإعراب tabs, required like the
+    // meanings above (same dataset, same CC BY 4.0 licence).
+    final sarfTCRaw = await rootBundle
+        .loadString('assets/quran_data/word_sarf_tafsircenter.json');
+    final irabTCRaw = await rootBundle
+        .loadString('assets/quran_data/word_irab_tafsircenter.json');
     // مخلوف short glosses + additions are optional like the lexicon:
     // a missing/corrupt file must not break the rest of the word data.
     try {
@@ -90,6 +107,8 @@ class QuranWordData {
         await rootBundle.loadString('assets/quran_data/hizb_quarters.json');
     _meanings = jsonDecode(meaningsRaw) as Map<String, dynamic>;
     _tafsirCenter = jsonDecode(tafsirCenterRaw) as Map<String, dynamic>;
+    _sarfTC = jsonDecode(sarfTCRaw) as Map<String, dynamic>;
+    _irabTC = jsonDecode(irabTCRaw) as Map<String, dynamic>;
     _tafsir = jsonDecode(tafsirRaw) as Map<String, dynamic>;
     _morphology = jsonDecode(morphRaw) as Map<String, dynamic>;
     final quartersJson = jsonDecode(quartersRaw) as List<dynamic>;
@@ -111,6 +130,27 @@ class QuranWordData {
     // mark — drop it, or مُوسَىٰ would no longer match مُوسَى.
     s = s.replaceAll('\u0649\u0670', '\u0649'); // ىٰ -> ى
     s = s.replaceAll('\u0670', '\u0627'); // ٰ -> ا
+    // Hamza-above U+0654 / hamza-below U+0655 on a seat letter is a
+    // REAL hamza letter, not a diacritic: the Uthmani asset writes
+    // it as ئ (ya + hamza-above, e.g. ٱلسَّيّئُ in 35:43) while
+    // the reader's QCF text writes the same word with the
+    // precomposed ئ (ٱلسَّيِّئُ) — and مخلوف writes it a third way,
+    // with hamza-BELOW (يٕ). Unify the seat+hamza to the
+    // precomposed letter BEFORE the strip below, or the strip
+    // deletes the hamza on one side only (asset norm السيي vs QCF
+    // norm السيئ) and the word silently loses its meaning/sarf/
+    // irab (v13.11 fix — the last unmatched display word in the
+    // whole Mushaf, 35:43 word 9; the same fix also keeps its
+    // مخلوف match, whose entry uses the hamza-below spelling).
+    // The tatweel seat (ـٔ, 495 words, e.g. أَنۢبِـُٔونِي) needs
+    // no such rule: both sides write it the same way and the strip
+    // removes the tatweel + hamza identically on both.
+    s = s.replaceAll('\u064A\u0654', '\u0626'); // ئ -> ئ
+    s = s.replaceAll('\u0648\u0654', '\u0624'); // ؤ -> ؤ
+    s = s.replaceAll('\u0627\u0654', '\u0623'); // أ -> أ
+    s = s.replaceAll('\u064A\u0655', '\u0626'); // يٕ -> ئ
+    s = s.replaceAll('\u0648\u0655', '\u0624'); // وٕ -> ؤ
+    s = s.replaceAll('\u0627\u0655', '\u0625'); // إ -> إ
     // Strip diacritics + tatweel + small marks — INCLUDING the open
     // tanwin U+08F0–U+08F2 (v13.11 fix): the Tafsir Center asset uses
     // Uthmani open tanwin (6,643 words, e.g. ءَايَٰتࣱ ends U+08F1)
@@ -197,6 +237,109 @@ class QuranWordData {
       int surah, int verse) async {
     await ensureLoaded();
     return _entriesFrom(_tafsirCenter, surah, verse);
+  }
+
+  /// Tafsir Center per-word sarf for an ayah (v13.11), or empty list.
+  /// Same format («surah:ayah» → [[word, sarf]]); the sarf text is
+  /// the Center's full analysis (avg ~157 chars) — shown in FULL,
+  /// never shortened, exactly like the meanings.
+  static Future<List<(String, String)>> tafsirCenterSarfEntriesForAyah(
+      int surah, int verse) async {
+    await ensureLoaded();
+    return _entriesFrom(_sarfTC, surah, verse);
+  }
+
+  /// Tafsir Center per-word i'rab for an ayah (v13.11), or empty list.
+  /// Same format («surah:ayah» → [[word, i'rab]]); the i'rab text is
+  /// the Center's full per-word analysis (avg ~138 chars) — shown in
+  /// FULL, never shortened. Whole-ayah i'rab is a different table
+  /// and is NOT bundled (new feature needing design).
+  static Future<List<(String, String)>> tafsirCenterIrabEntriesForAyah(
+      int surah, int verse) async {
+    await ensureLoaded();
+    return _entriesFrom(_irabTC, surah, verse);
+  }
+
+  /// Full Tafsir Center sarf of one tapped word, or null when the
+  /// Center has no entry for it (it covers 100%, so null should
+  /// never happen — the caller falls back to [morphForWord]).
+  static Future<String?> sarfForWord(
+      int surah, int verse, String word) async {
+    final entries = await tafsirCenterSarfEntriesForAyah(surah, verse);
+    return _matchWord(entries, word);
+  }
+
+  /// Full Tafsir Center per-word i'rab of one tapped word, or null
+  /// when the Center has no entry for it (100% coverage — the caller
+  /// falls back to the simplified [morphForWord] description).
+  static Future<String?> irabForWord(
+      int surah, int verse, String word) async {
+    final entries = await tafsirCenterIrabEntriesForAyah(surah, verse);
+    return _matchWord(entries, word);
+  }
+
+  /// Which source the التصريف tab draws on for this word:
+  /// 'tafsircenter' (مركز تفسير, v13.11 — the card shows the small
+  /// credit line for it), 'morph' (the simplified bundled morphology
+  /// description, fallback-only), or 'none'.
+  static Future<String> sarfSourceForWord(
+      int surah, int verse, String word) async {
+    if (await sarfForWord(surah, verse, word) != null) {
+      return 'tafsircenter';
+    }
+    if (await morphForWord(surah, verse, word) != null) return 'morph';
+    return 'none';
+  }
+
+  /// Which source the الإعراب tab draws on for this word:
+  /// 'tafsircenter' (مركز تفسير, v13.11 — the card shows the small
+  /// credit line for it), 'morph' (the simplified bundled morphology
+  /// description, fallback-only, with the honest disclaimer), or
+  /// 'none'.
+  static Future<String> irabSourceForWord(
+      int surah, int verse, String word) async {
+    if (await irabForWord(surah, verse, word) != null) {
+      return 'tafsircenter';
+    }
+    if (await morphForWord(surah, verse, word) != null) return 'morph';
+    return 'none';
+  }
+
+  /// Coverage of the Tafsir Center sarf + per-word i'rab over the
+  /// whole Mushaf, measured with the app's own matching logic (the
+  /// same [_matchWord] the card uses, on the card's own lookup
+  /// text). The denominator is the TRUE display-word count — the
+  /// QCF words (77,433) — NOT the morphology-entry count (77,429):
+  /// the morphology file merges 4 phrases into one entry each
+  /// (بَعۡدَ مَا in 2:181/8:6/13:37, إِلۡ يَاسِينَ in 37:130), so
+  /// its 77,429 entries hide 4 display spellings that never appear
+  /// in the card (15:7's duplicated لَّوۡمَا entry and its 2
+  /// display words cancel out). (The meanings' 77,429/77,429 used
+  /// morphology entries and reached 100% only because the
+  /// غريب/lexicon fallbacks caught the merged entries.) Both tables
+  /// cover 100% of display words by construction (77,432 dataset
+  /// rows = the same word universe, plus the 15:7 لَوْمَا gloss
+  /// used twice); this measures it in-app, through the card's
+  /// lookup path.
+  static Future<({int total, int withSarf, int withIrab})>
+      sarfIrabCoverageStats() async {
+    await ensureLoaded();
+    var total = 0;
+    var withSarf = 0;
+    var withIrab = 0;
+    for (final key in _morphology!.keys) {
+      final parts = key.split(':');
+      final surah = int.parse(parts[0]);
+      final verse = int.parse(parts[1]);
+      final sarfEntries = _entriesFrom(_sarfTC, surah, verse);
+      final irabEntries = _entriesFrom(_irabTC, surah, verse);
+      for (final word in buildQcfWordMap(surah, verse).words) {
+        total++;
+        if (_matchWord(sarfEntries, word.lookupText) != null) withSarf++;
+        if (_matchWord(irabEntries, word.lookupText) != null) withIrab++;
+      }
+    }
+    return (total: total, withSarf: withSarf, withIrab: withIrab);
   }
 
   /// مخلوف short in-ayah glosses for an ayah (v13.6), or empty list.
@@ -681,18 +824,59 @@ class QuranWordData {
   /// Raghib / the morphology description instead. The غريب and
   /// morphology lookups keep [_matchWord] (containment included) —
   /// their behaviour is unchanged.
+  /// Last vowel/diacritic of a word (U+064B–U+0652: tanwin, fatha,
+  /// damma, kasra, sukun, shadda), scanning from the end and skipping
+  /// trailing pause marks (ۚ etc.). Used to tell apart repeated
+  /// words that differ only in case — the same bare word often recurs
+  /// in one ayah in different cases (ٱللَّهُ / ٱللَّهَ / ٱللَّهِ;
+  /// 847 such groups in the sarf asset alone), and picking the first
+  /// normalized match would show the wrong i'rab for the later
+  /// occurrences (e.g. 35:43 word 9 ٱلسَّيِّئُ nominative getting
+  /// word 5's genitive i'rab). Open tanwin (U+08F0–U+08F2) is not in
+  /// this range, so a word ending in it simply gets no vowel
+  /// preference (first match stands, as before).
+  static String _finalVowel(String s) {
+    for (var i = s.length - 1; i >= 0; i--) {
+      final c = s.codeUnitAt(i);
+      if (c >= 0x064B && c <= 0x0652) {
+        return String.fromCharCode(c);
+      }
+    }
+    return '';
+  }
+
+  /// Among normalized-equal candidates, prefer the one whose final
+  /// vowel matches the lookup word's (see [_finalVowel]); falls back
+  /// to the first candidate when none matches.
+  static String _preferVowel(
+      List<(String, String)> candidates, String word) {
+    final want = _finalVowel(word);
+    if (want.isNotEmpty) {
+      for (final (text, value) in candidates) {
+        if (_finalVowel(text) == want) return value;
+      }
+    }
+    return candidates.first.$2;
+  }
+
   static String? _matchWordStrict(
       List<(String, String)> entries, String word) {
     final wordNorm = normalizeArabic(word);
     if (wordNorm.isEmpty) return null;
+    final exact = <(String, String)>[];
     for (final (text, value) in entries) {
-      if (normalizeArabic(text) == wordNorm) return value;
+      if (normalizeArabic(text) == wordNorm) exact.add((text, value));
     }
+    if (exact.isNotEmpty) return _preferVowel(exact, word);
+    final tokenMatches = <(String, String)>[];
     for (final (text, value) in entries) {
       for (final token in text.split(RegExp(r'\s+'))) {
-        if (normalizeArabic(token) == wordNorm) return value;
+        if (normalizeArabic(token) == wordNorm) {
+          tokenMatches.add((token, value));
+        }
       }
     }
+    if (tokenMatches.isNotEmpty) return _preferVowel(tokenMatches, word);
     return null;
   }
 
@@ -700,15 +884,21 @@ class QuranWordData {
     final wordNorm = normalizeArabic(word);
     if (wordNorm.isEmpty) return null;
     // 1) exact normalized match (handles multi-word phrases too)
+    final exact = <(String, String)>[];
     for (final (text, value) in entries) {
-      if (normalizeArabic(text) == wordNorm) return value;
+      if (normalizeArabic(text) == wordNorm) exact.add((text, value));
     }
+    if (exact.isNotEmpty) return _preferVowel(exact, word);
     // 2) token match inside a multi-word phrase (e.g. بِسْمِ in بِسْمِ اللهِ)
+    final tokenMatches = <(String, String)>[];
     for (final (text, value) in entries) {
       for (final token in text.split(RegExp(r'\s+'))) {
-        if (normalizeArabic(token) == wordNorm) return value;
+        if (normalizeArabic(token) == wordNorm) {
+          tokenMatches.add((token, value));
+        }
       }
     }
+    if (tokenMatches.isNotEmpty) return _preferVowel(tokenMatches, word);
     // 3) containment for longer words (phrase contains the word)
     if (wordNorm.length >= 3) {
       for (final (text, value) in entries) {
