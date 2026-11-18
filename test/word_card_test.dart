@@ -222,8 +222,9 @@ void main() {
       ));
       expect(medallion.data, '٧');
       // Meaning visible at once (v13.5 bug: it hid behind the audio
-      // spinner) — the مخلوف gloss for «آيَاتٌ مُّحْكَمَاتٌ».
-      expect(find.textContaining('واضحات لا احتمال فيها ولا اشباه'),
+      // spinner) — the Tafsir Center gloss for «آيَاتٌ مُّحْكَمَاتٌ»
+      // (v13.11; was the مخلوف gloss «واضحات لا احتمال فيها»).
+      expect(find.textContaining('واضحة المعنى، بعيدة عن الاحتمال'),
           findsOneWidget);
       // The 4 tabs.
       for (final label in ['المعنى', 'التصريف', 'الإعراب', 'القراءات']) {
@@ -286,7 +287,8 @@ void main() {
 
       await tester.tap(find.byKey(const ValueKey('tabMeaning')));
       await tester.pump();
-      expect(find.textContaining('واضحات لا احتمال فيها ولا اشباه'),
+      // v13.11: the Tafsir Center gloss for مُّحْكَمَاتٌ.
+      expect(find.textContaining('واضحة المعنى، بعيدة عن الاحتمال'),
           findsOneWidget);
       expect(tester.takeException(), isNull);
     });
@@ -581,7 +583,11 @@ void main() {
       );
       await tester.pump();
 
-      expect(find.text('جارٍ التحميل…'), findsOneWidget);
+      // v13.11: no download display any more (the user's choice) —
+      // no "جارٍ التحميل…" text, no bar, no percent. The play
+      // button's spinner is the only loading sign; the button
+      // itself stays enabled (green) and tappable while loading.
+      expect(find.text('جارٍ التحميل…'), findsNothing);
       final playButton = tester.widget<ElevatedButton>(
         find.descendant(
           of: find.byTooltip('تشغيل'),

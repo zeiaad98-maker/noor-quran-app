@@ -2,10 +2,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:noor_quran/data/quran_audio.dart';
 
 void main() {
-  test('15 reciters, unique names, all fields filled', () {
-    expect(reciters.length, 15);
+  test('16 reciters, unique names, all fields filled', () {
+    expect(reciters.length, 16);
     final names = reciters.map((r) => r.name).toSet();
-    expect(names.length, 15);
+    expect(names.length, 16);
     for (final r in reciters) {
       expect(r.server, isNotEmpty);
       expect(r.everyayah, isNotEmpty);
@@ -26,6 +26,14 @@ void main() {
     // Ibrahim Akhdar uses the working 32kbps folder, not the broken 64kbps.
     final akhdar = reciters.firstWhere((r) => r.name == 'إبراهيم الأخضر');
     expect(akhdar.everyayah, 'Ibrahim_Akhdar_32kbps');
+    // Ahmed ibn Ali al-Ajmi (v13.11, user order): verified live
+    // 2026-11-18 — everyayah folder, mp3quran server and
+    // islamic.network edition all return 200.
+    final ajmi = reciters.firstWhere((r) => r.name == 'أحمد بن علي العجمي');
+    expect(ajmi.everyayah, 'ahmed_ibn_ali_al_ajamy_128kbps');
+    expect(mp3quranSurahUrl(ajmi, 1),
+        'https://cdn.mp3quran.net/audio/ahmad-ajmi/r1/001.mp3');
+    expect(ajmi.quranComRecitationId, isNull);
   });
 
   test('Quran.com ayah audio URLs (word-segment source)', () {

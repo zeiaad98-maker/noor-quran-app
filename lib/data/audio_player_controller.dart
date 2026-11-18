@@ -325,6 +325,46 @@ class AudioPlayerController extends ChangeNotifier {
     queueIndex = 0;
     wordIndex = null;
     _scopePlays = 1;
+    // v13.11 — whole-page preload (the user's order, 2026-11-18):
+    // a page plays ONLY after ALL its ayahs are downloaded; no
+    // sound until the page is fully cached, no ayah-by-ayah loading
+    // mid-playback. Silent: no progress UI (the user chose no
+    // download display at all); the play button spinner is the only
+    // sign. A failed ayah stops the whole page with the error —
+    // never a half-played page. Cached ayahs return at once, so a
+    // replay / retry costs nothing. stop() aborts the preload via
+    // the token (see stop()).
+    final token = ++_playToken;
+    lastError = null;
+    isLoading = true;
+    downloadProgress = null;
+    notifyListeners();
+    final dl = downloads;
+    var preloaded = true;
+    if (dl != null) {
+      for (final ayah in queue) {
+        if (token != _playToken || _disposed) return;
+        final file = await dl.cacheAyahFile(
+          reciter,
+          ayah.$1,
+          ayah.$2,
+          isCancelled: () => token != _playToken,
+        );
+        if (token != _playToken || _disposed) return;
+        if (file == null) {
+          preloaded = false;
+          break;
+        }
+      }
+    }
+    if (token != _playToken || _disposed) return;
+    if (!preloaded) {
+      isLoading = false;
+      downloadProgress = null;
+      notifyListeners();
+      _reportError(() => playPages(from, to));
+      return;
+    }
     await _playCurrent();
   }
 

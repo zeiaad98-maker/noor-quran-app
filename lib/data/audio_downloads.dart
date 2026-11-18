@@ -142,10 +142,15 @@ class AudioDownloadService extends ChangeNotifier {
   /// ([everyayahWwwUrl] — same host as the ZIP, proven to open
   /// from his network) goes FIRST: one small file (~80–160 KB),
   /// playback starts in seconds, and the next ayah is prefetched
-  /// while the current one plays. The ZIP stays as the fallback
-  /// (same host, whole surah cached offline in one go) and as the
-  /// explicit bulk download ([downloadSurahs]); the bare-HTTPS
-  /// per-ayah URL is the last resort for networks where it works.
+  /// while the current one plays. The bare-HTTPS per-ayah URL is
+  /// the third try (v13.11 — a small file before the giant ZIP,
+  /// so a failed www file never triggers a whole-surah download
+  /// before the cheap retries); islamic.network per-ayah is the
+  /// second try for reciters with a content-verified edition
+  /// (Hani Rifai only so far — a DIFFERENT host, for when
+  /// everyayah itself is unreachable); the ZIP is the last resort
+  /// (same host, whole surah cached offline in one go) and the
+  /// explicit bulk download ([downloadSurahs]).
   /// Returns the file, or null when the download fails (the player
   /// then falls back to streaming). Never throws. [onProgress] /
   /// [isCancelled] are forwarded to the streamed download (v13.3).
@@ -173,7 +178,42 @@ class AudioDownloadService extends ChangeNotifier {
       return localAyahFile(reciter, surah, ayah);
     }
     if (isCancelled?.call() ?? false) return null;
-    // 2. Whole-surah ZIP (same host) — caches the surah offline.
+    // 2. islamic.network per-ayah (v13.11) — a DIFFERENT host: the
+    // same recordings as everyayah, verified by content
+    // (identical transcripts + bit-identical PCM). Only when the
+    // reciter has a verified edition (null otherwise — Tunaiji has
+    // no per-ayah files there, and المنشاوي's edition is the wrong
+    // recording style, so both stay everyayah-only).
+    final islamicUrl = islamicNetworkUrl(reciter, surah, ayah);
+    if (islamicUrl != null &&
+        await _fetchToFile(
+          islamicUrl,
+          file,
+          onProgress: onProgress,
+          isCancelled: isCancelled,
+        )) {
+      return localAyahFile(reciter, surah, ayah);
+    }
+    if (isCancelled?.call() ?? false) return null;
+    // 3. Bare-HTTPS per-ayah (v13.11) — still one small file. It
+    // moved ahead of the ZIP: when the www file fails, the next try
+    // must be another SMALL file, not a whole-surah ZIP (58 MB for
+    // Baqarah) that stalls the page for minutes before the error —
+    // the user's "the page takes too long" complaint (2026-11-18,
+    // page 151). The bare host does not open from his Syrian
+    // network, so on his phone this step fails fast and the ZIP
+    // below is the real fallback; on networks where bare works it
+    // saves the surah download entirely.
+    if (await _fetchToFile(
+      everyayahUrl(reciter, surah, ayah),
+      file,
+      onProgress: onProgress,
+      isCancelled: isCancelled,
+    )) {
+      return localAyahFile(reciter, surah, ayah);
+    }
+    if (isCancelled?.call() ?? false) return null;
+    // 4. Whole-surah ZIP (same host) — caches the surah offline.
     final extracted = await _downloadSurahZip(
       reciter,
       surah,
@@ -183,19 +223,20 @@ class AudioDownloadService extends ChangeNotifier {
     if (extracted != null) {
       final cached = localAyahFile(reciter, surah, ayah);
       if (cached != null) return cached;
-      // The ZIP extracted but this ayah is not in it: fall through
-      // to the per-ayah download below.
-    }
-    if (isCancelled?.call() ?? false) return null;
-    // 3. Bare-HTTPS per-ayah, last resort for networks where it
-    // works.
-    if (await _fetchToFile(
-      everyayahUrl(reciter, surah, ayah),
-      file,
-      onProgress: onProgress,
-      isCancelled: isCancelled,
-    )) {
-      return localAyahFile(reciter, surah, ayah);
+      // The ZIP extracted but this ayah is not in it — one last
+      // try of the bare per-ayah file (v13.5 guarantee): the bare
+      // attempt at step 3 may have failed transiently, and the
+      // ZIP was the only thing left. If it 404s again the file
+      // simply does not exist anywhere.
+      if (isCancelled?.call() ?? false) return null;
+      if (await _fetchToFile(
+        everyayahUrl(reciter, surah, ayah),
+        file,
+        onProgress: onProgress,
+        isCancelled: isCancelled,
+      )) {
+        return localAyahFile(reciter, surah, ayah);
+      }
     }
     return null;
   }
