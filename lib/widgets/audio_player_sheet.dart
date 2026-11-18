@@ -68,6 +68,14 @@ class AudioPlayerSheet extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 12),
+                // v13.9: the scope tabs sit FIRST in the sheet, right
+                // under the drag handle — before the playback controls.
+                // In v13.8 they sat below the controls / current label,
+                // under the fold, and the user could not find the
+                // الصفحة tab at all. Now all four tabs are visible the
+                // moment the sheet opens, no scrolling needed.
+                _scopeTabs(textColor),
+                const SizedBox(height: 14),
                 _topRow(context),
                 // Loading label under the play button: while the word
                 // / ayah file buffers, the play button keeps its
@@ -176,8 +184,6 @@ class AudioPlayerSheet extends StatelessWidget {
                     ),
                   ),
                 const SizedBox(height: 12),
-                _scopeTabs(textColor),
-                const SizedBox(height: 14),
                 _scopeBody(context, textColor),
                 const SizedBox(height: 16),
                 const Divider(),
