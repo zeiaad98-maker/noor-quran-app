@@ -348,6 +348,7 @@ void main() {
                   onPlayWord: (_) {},
                   onRepeatWord: (_) {},
                   onPlayAyah: () => playedAyahs.add((3, 7)),
+                  onPlayPage: () {},
                   onContinueFromAyah: () {},
                   onGoToLastReading: () {},
                   onOpenNotesScreen: () {},

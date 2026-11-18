@@ -81,6 +81,7 @@ void main() {
                   onPlayWord: (_) {},
                   onRepeatWord: (_) {},
                   onPlayAyah: () {},
+                  onPlayPage: () {},
                   onContinueFromAyah: () {},
                   onGoToLastReading: () {},
                   onOpenNotesScreen: onOpenNotesScreen ?? () {},
@@ -183,14 +184,17 @@ void main() {
       expect(find.byType(WordCard), findsOneWidget);
       expect(blueWord(words[6].text), findsOneWidget);
       expect(blueWord(words[7].text), findsNothing);
-      // The old word's gloss is gone; the new word's gloss is shown.
+      // The old word's gloss is gone. آيَاتٌ has no short meaning in
+      // any source — its wordGloss is the generic fallback — so since
+      // v13.9 the المعنى tab says so honestly instead of showing the
+      // generic fallback text (the old probe asserted that text).
       expect(find.textContaining('واضحات لا احتمال فيها ولا اشباه'),
           findsNothing);
-      final gloss =
-          await QuranWordData.wordGloss(3, 7, words[6].lookupText);
-      expect(gloss, isNotEmpty);
-      final probe = gloss.length > 20 ? gloss.substring(0, 20) : gloss;
-      expect(find.textContaining(probe), findsOneWidget);
+      expect(await QuranWordData.wordGloss(3, 7, words[6].lookupText),
+          'كلمة من كلمات القرآن الكريم');
+      expect(
+          find.text('لا يوجد معنى مختصر لهذه الكلمة في المصادر المتوفرة.'),
+          findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 

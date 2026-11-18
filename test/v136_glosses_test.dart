@@ -54,13 +54,14 @@ void main() {
         'withGloss=${stats.withGloss}');
     expect(stats.total, 77429);
     // Measured with the app's own matching (strict for مخلوف /
-    // additions): 10,308 words show a مخلوف gloss first, 1 word an
-    // additions gloss; the union with غريب + Raghib is 50,409 (65.1%).
+    // additions): 10,308 words show a مخلوف gloss first, 3 words an
+    // additions gloss (4:4 + v13.9: 15:11، 15:12); the union with
+    // غريب + Raghib is 50,411 (65.1%).
     expect(stats.withMakhloof, 10308);
-    expect(stats.withAddition, 1);
+    expect(stats.withAddition, 3);
     expect(stats.withGharib, 9851);
     expect(stats.withLexicon, 46199);
-    expect(stats.withMeaning, 50409);
+    expect(stats.withMeaning, 50411);
     // A gloss still exists for EVERY word (meaning or morphology).
     expect(stats.withGloss, stats.total);
   });
