@@ -17,7 +17,6 @@ import 'package:noor_quran/widgets/audio_player_sheet.dart';
 import 'package:noor_quran/widgets/word_card.dart';
 
 import 'fake_just_audio.dart';
-import 'zip_fixture.dart';
 
 // v13.7 — the user's two reports on v13.6 (2026-11-18 10:19):
 //
@@ -83,38 +82,31 @@ void main() {
       ]);
     });
 
-    test('www and bare per-ayah 404 fall back to the ZIP (v13.11 order)',
-        () async {
+    test('www, islamic, alternates and bare all 404 → null, no ZIP '
+        'request (v13.12)', () async {
       final requested = <String>[];
-      final zipBytes = buildSurahZip(
-        {'002033.mp3': [3, 3, 3]},
-        stored: true,
-      );
       service = await buildService(MockClient((request) async {
         requested.add(request.url.toString());
-        if (request.url.path.endsWith('.zip')) {
-          return http.Response.bytes(zipBytes, 200);
-        }
-        if (request.url.host == 'www.everyayah.com') {
-          return http.Response.bytes([], 404);
-        }
-        if (request.url.host == 'everyayah.com') {
-          return http.Response.bytes([], 404);
-        }
-        return http.Response.bytes([7], 200);
+        return http.Response.bytes([], 404);
       }));
 
       final file = await service.cacheAyahFile(reciters[12], 2, 33);
-      expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [3, 3, 3]);
+      expect(file, isNull);
+      expect(service.localAyahFile(reciters[12], 2, 33), isNull);
+      // v13.12 (user's correction): the whole-surah ZIP is NOT a
+      // playback fallback — the chain ends at the bare file.
+      // Tunaiji has no islamic.network step.
       expect(requested, [
         'http://www.everyayah.com/data/khalefa_al_tunaiji_64kbps/002033.mp3',
+        'https://verses.quran.com/Tunaiji/mp3/002033.mp3',
+        'https://huggingface.co/datasets/maqra-project/khalifa-al-tunaiji-64kbps/resolve/main/002033.mp3',
         'https://everyayah.com/data/khalefa_al_tunaiji_64kbps/002033.mp3',
-        'http://www.everyayah.com/data/khalefa_al_tunaiji_64kbps/zips/002.zip',
       ]);
+      expect(requested.any((u) => u.contains('/zips/')), isFalse);
     });
 
-    test('www, ZIP and bare per-ayah all fail → null, no file', () async {
+    test('www, alternates and bare per-ayah all fail → null, no file',
+        () async {
       service = await buildService(MockClient((request) async {
         return http.Response.bytes([], 404);
       }));

@@ -127,6 +127,15 @@ void main() {
       serviceCreated = false;
     });
 
+    /// Wait (real async) until the service has no running job.
+    Future<void> waitForIdle(AudioDownloadService s) async {
+      for (var i = 0; i < 200; i++) {
+        if (!s.isDownloading) return;
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      fail('download did not finish in time');
+    }
+
     test('everyayahSurahZipUrl builds Wahy\'s exact address', () {
       expect(everyayahSurahZipUrl(reciters[12], 1),
           'http://www.everyayah.com/data/khalefa_al_tunaiji_64kbps/zips/001.zip');
@@ -149,32 +158,26 @@ void main() {
         if (request.url.path.endsWith('.zip')) {
           return http.Response.bytes(zipBytes, 200);
         }
-        // v13.11: the www per-ayah attempt goes first and 404s
-        // here, and the bare per-ayah file 404s too, so the ZIP
-        // path runs.
-        if (request.url.host == 'www.everyayah.com') {
-          return http.Response.bytes([], 404);
-        }
-        if (request.url.host == 'everyayah.com') {
-          return http.Response.bytes([], 404);
-        }
-        return http.Response.bytes([9, 9], 200);
+        return http.Response.bytes([], 404);
       }));
       final tunaiji = reciters[12];
 
-      final first = await service.cacheAyahFile(tunaiji, 1, 1);
-      expect(first, isNotNull);
-      expect(await first!.readAsBytes(), [1]);
-      // One ZIP request cached the whole surah: the next ayah in
-      // the same surah needs no further download.
-      final seventh = await service.cacheAyahFile(tunaiji, 1, 7);
-      expect(seventh, isNotNull);
-      expect(await seventh!.readAsBytes(), [7]);
-      expect(requested, [
-        'http://www.everyayah.com/data/khalefa_al_tunaiji_64kbps/001001.mp3',
-        'https://everyayah.com/data/khalefa_al_tunaiji_64kbps/001001.mp3',
-        'http://www.everyayah.com/data/khalefa_al_tunaiji_64kbps/zips/001.zip',
-      ]);
+      // v13.12 (user's correction): the ZIP lives ONLY in the
+      // explicit bulk download the user starts himself from
+      // «تحميل التلاوات» — playback never requests it.
+      expect(await service.downloadSurahs(12, [1]), isTrue);
+      await waitForIdle(service);
+
+      final job = service.activeJob!;
+      expect(job.status, DownloadStatus.done);
+      expect(service.isSurahDownloaded(12, 1), isTrue);
+      // One ZIP request cached the whole surah.
+      expect(requested, [everyayahSurahZipUrl(tunaiji, 1)]);
+      for (var a = 1; a <= 7; a++) {
+        final cached = service.localAyahFile(tunaiji, 1, a);
+        expect(cached, isNotNull, reason: 'ayah 1:$a cached');
+        expect(await cached!.readAsBytes(), [a]);
+      }
       // The ZIP itself is deleted after extraction — the extracted
       // per-ayah files ARE the cache.
       expect(
@@ -194,7 +197,13 @@ void main() {
         return http.Response.bytes([], 404);
       }));
 
-      final file = await service.cacheAyahFile(reciters[0], 112, 2);
+      // v13.12: the ZIP is bulk-download only — surah 112 has
+      // 4 ayahs, the ZIP holds all 4, deflated.
+      expect(await service.downloadSurahs(0, [112]), isTrue);
+      await waitForIdle(service);
+
+      expect(service.activeJob!.status, DownloadStatus.done);
+      final file = service.localAyahFile(reciters[0], 112, 2);
       expect(file, isNotNull);
       expect(await file!.readAsBytes(), [2, 2, 2]);
     });
@@ -210,6 +219,13 @@ void main() {
         if (request.url.host == 'www.everyayah.com') {
           return http.Response.bytes([], 404);
         }
+        // v13.12: Husary's alternate hosts (mirror + Maqra) 404
+        // here too — they sit between islamic.network and bare
+        // in the chain, so the bare file is what serves it.
+        if (request.url.host == 'mirrors.quranicaudio.com' ||
+            request.url.host == 'huggingface.co') {
+          return http.Response.bytes([], 404);
+        }
         return http.Response.bytes([7, 7], 200);
       }));
 
@@ -220,6 +236,8 @@ void main() {
       expect(requested, [
         'http://www.everyayah.com/data/Husary_64kbps/112002.mp3',
         'https://cdn.islamic.network/quran/audio/64/ar.husary/6223.mp3',
+        'https://mirrors.quranicaudio.com/everyayah/Husary_64kbps/112002.mp3',
+        'https://huggingface.co/datasets/maqra-project/mahmoud-al-husary-murattal-64kbps/resolve/main/112002.mp3',
         'https://everyayah.com/data/Husary_64kbps/112002.mp3',
       ]);
     });
@@ -228,58 +246,59 @@ void main() {
       AudioDownloadService.fetchAttempts = 1;
       addTearDown(() => AudioDownloadService.fetchAttempts = 2);
       final requested = <String>[];
-      // The ZIP holds only 001001 — the requested 1:7 is not in it.
+      // The ZIP holds only 001001 — the other 6 ayahs are not in it.
       final zipBytes = buildSurahZip(
         {'001001.mp3': [1]},
         stored: true,
       );
-      var bareAttempts = 0;
       service = await buildService(MockClient((request) async {
         requested.add(request.url.toString());
         if (request.url.path.endsWith('.zip')) {
           return http.Response.bytes(zipBytes, 200);
         }
-        // v13.11: the www per-ayah attempt goes first and 404s
-        // here, and the bare per-ayah file fails transiently at
-        // step 3, so the ZIP path runs — and the ZIP lacks this
-        // ayah, so the post-ZIP bare retry is what serves it.
-        if (request.url.host == 'www.everyayah.com') {
-          return http.Response.bytes([], 404);
-        }
+        // The bulk job fills the missing ayahs with [_downloadOne],
+        // which fetches the bare per-ayah file — one small file per
+        // missing ayah, distinct bytes each.
         if (request.url.host == 'everyayah.com') {
-          bareAttempts++;
-          if (bareAttempts == 1) {
-            return http.Response.bytes([], 500);
-          }
-          return http.Response.bytes([7], 200);
+          final name = request.url.pathSegments.last;
+          final ayah = int.parse(name.substring(3, 6));
+          return http.Response.bytes([ayah], 200);
         }
         return http.Response.bytes([], 404);
       }));
       final tunaiji = reciters[12];
 
-      final file = await service.cacheAyahFile(tunaiji, 1, 7);
-      expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [7]);
+      // v13.12: the ZIP is bulk-download only.
+      expect(await service.downloadSurahs(12, [1]), isTrue);
+      await waitForIdle(service);
+
+      expect(service.activeJob!.status, DownloadStatus.done);
+      expect(service.isSurahDownloaded(12, 1), isTrue);
       expect(requested, [
-        'http://www.everyayah.com/data/khalefa_al_tunaiji_64kbps/001007.mp3',
-        'https://everyayah.com/data/khalefa_al_tunaiji_64kbps/001007.mp3',
-        'http://www.everyayah.com/data/khalefa_al_tunaiji_64kbps/zips/001.zip',
-        'https://everyayah.com/data/khalefa_al_tunaiji_64kbps/001007.mp3',
+        everyayahSurahZipUrl(tunaiji, 1),
+        for (var a = 2; a <= 7; a++)
+          'https://everyayah.com/data/khalefa_al_tunaiji_64kbps/00100$a.mp3',
       ]);
-      // The ZIP's own ayah is on disk too.
-      expect(await service.localAyahFile(tunaiji, 1, 1)!.readAsBytes(),
-          [1]);
+      // All 7 ayahs cached: the ZIP's own ayah plus the per-ayah
+      // fill-ins.
+      for (var a = 1; a <= 7; a++) {
+        final cached = service.localAyahFile(tunaiji, 1, a);
+        expect(cached, isNotNull, reason: 'ayah 1:$a cached');
+        expect(await cached!.readAsBytes(), [a]);
+      }
     });
 
-    test('garbage ZIP bytes fall back to per-ayah', () async {
+    test('garbage ZIP bytes are never requested in playback; '
+        'per-ayah serves it', () async {
       service = await buildService(MockClient((request) async {
         if (request.url.path.endsWith('.zip')) {
           return http.Response.bytes([9, 9, 9], 200);
         }
-        // v13.7: the www per-ayah attempt goes first and 404s here,
-        // so the garbage-ZIP path is exercised.
+        // v13.12: playback never requests the ZIP — the www
+        // per-ayah file serves the ayah, so the garbage ZIP is
+        // never even downloaded.
         if (request.url.host == 'www.everyayah.com') {
-          return http.Response.bytes([], 404);
+          return http.Response.bytes([4], 200);
         }
         return http.Response.bytes([4], 200);
       }));
@@ -289,7 +308,7 @@ void main() {
       expect(await file!.readAsBytes(), [4]);
     });
 
-    test('ZIP and per-ayah both fail → null, no file left behind',
+    test('per-ayah hosts all fail → null, no file left behind',
         () async {
       service = await buildService(MockClient((request) async {
         return http.Response.bytes([], 404);
@@ -301,8 +320,8 @@ void main() {
     });
   });
 
-  group('controller — ZIP + SurahPedia stream fallbacks (fake platform)',
-      () {
+  group('controller — bulk download + SurahPedia stream fallbacks '
+      '(fake platform)', () {
     setUp(() {
       fake.autoFinish = false;
       fake.failLoadSubstrings.clear();
@@ -348,8 +367,8 @@ void main() {
       expect(controller.lastError, isNull);
     });
 
-    test('ayah plays from the ZIP-cached local file (Tunaiji 1:1)',
-        () async {
+    test('ayah plays from the bulk-downloaded local file '
+        '(Tunaiji 1:1)', () async {
       SharedPreferences.setMockInitialValues({});
       final tempDir =
           await Directory.systemTemp.createTemp('v135-ctrl-zip');
@@ -374,6 +393,17 @@ void main() {
       addTearDown(controller.dispose);
       controller.reciterIndex = 12; // خليفة الطنيجي (default)
 
+      // v13.12: the ZIP is bulk-download only — seed the cache
+      // with the explicit download the user starts himself, then
+      // the ayah plays from the local file.
+      expect(await downloads.downloadSurahs(12, [1]), isTrue);
+      for (var i = 0; i < 200; i++) {
+        if (!downloads.isDownloading) break;
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(downloads.isDownloading, isFalse);
+      expect(downloads.activeJob!.status, DownloadStatus.done);
+
       await controller.playAyah(1, 1);
 
       expect(controller.lastError, isNull);
@@ -387,7 +417,8 @@ void main() {
           [1]);
     });
 
-    test('ZIP fails: ayah still plays via the per-ayah stream', () async {
+    test('cache fails: ayah still plays via the per-ayah stream',
+        () async {
       SharedPreferences.setMockInitialValues({});
       final tempDir =
           await Directory.systemTemp.createTemp('v135-ctrl-stream');
@@ -408,8 +439,10 @@ void main() {
       await controller.playAyah(2, 33);
 
       expect(controller.lastError, isNull);
+      // v13.12: the stream tries www FIRST now (the bare URL is
+      // last) — the cache failed, so the www file is what plays.
       expect(fake.loadUris,
-          ['https://everyayah.com/data/Husary_64kbps/002033.mp3']);
+          ['http://www.everyayah.com/data/Husary_64kbps/002033.mp3']);
       expect(fake.player.playing, isTrue);
     });
   });

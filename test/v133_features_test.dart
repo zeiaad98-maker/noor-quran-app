@@ -131,11 +131,13 @@ void main() {
       }
     });
 
-    test('slow ZIP download succeeds when the www per-ayah file is '
-        'unavailable', () async {
-      // Same slow stream, but the www per-ayah file 404s — and the
-      // small fallbacks (islamic.network, bare) 404 too — so the
-      // ZIP path runs: progress ends at the ZIP's own total.
+    test('slow alternate-host download succeeds when the www '
+        'per-ayah file is unavailable', () async {
+      // Same slow stream, but the www per-ayah file 404s — and
+      // islamic.network + the bare host 404 too — so the MIRROR
+      // alternate host (v13.12) serves the slow file: progress
+      // ends at the file's own total, not a ZIP total (there is
+      // no ZIP in the playback path any more).
       AudioDownloadService.stallTimeout = const Duration(seconds: 1);
       final bytes = List<int>.generate(1000, (i) => i % 256);
       final zipBytes =
@@ -145,6 +147,7 @@ void main() {
         zipBytes: zipBytes,
         failWww: true,
         failFallbackHosts: true,
+        serveMirror: true,
         chunkGap: const Duration(milliseconds: 250),
       );
       await buildService(client);
@@ -157,7 +160,7 @@ void main() {
       );
       expect(file, isNotNull);
       expect(await file!.length(), 1000);
-      expect(progress.last, (zipBytes.length, zipBytes.length));
+      expect(progress.last, (1000, 1000));
       expect(progress.map((p) => p.$1).toSet().length, greaterThan(5));
       for (var i = 1; i < progress.length; i++) {
         expect(progress[i].$1, greaterThanOrEqualTo(progress[i - 1].$1));
@@ -268,7 +271,15 @@ void main() {
       fake.autoFinish = false;
       fake.failLoadSubstrings.clear();
       fake.loadDelay = Duration.zero;
-      fake.failLoadSubstrings.add('everyayah');
+      // v13.12: the ayah stream tries EVERY host in order (www,
+      // the alternates, islamic.network, bare) — all of them must
+      // fail for the error to show (Tunaiji: www + verses + Maqra
+      // + bare).
+      fake.failLoadSubstrings.addAll([
+        'everyayah',
+        'verses.quran.com',
+        'huggingface.co',
+      ]);
       final controller = AudioPlayerController();
       addTearDown(controller.dispose);
       controller.reciterIndex = 12;
@@ -438,18 +449,26 @@ class _FakeSlowClient extends http.BaseClient {
   final List<int> bytes;
 
   /// Full per-surah ZIP bytes, served for ZIP URLs only (v13.5:
-  /// cacheAyahFile tries the ZIP first, then the per-ayah file).
-  /// When null, [bytes] is served for every URL (the old behaviour).
+  /// the explicit bulk download fetches the ZIP; v13.12:
+  /// playback never requests it). When null, [bytes] is served
+  /// for every URL (the old behaviour).
   final List<int>? zipBytes;
 
   /// When true, the www per-ayah host 404s (v13.7: the www file is
-  /// tried first, so this forces the ZIP path).
+  /// tried first, so this forces the fallback hosts).
   final bool failWww;
 
   /// When true, the small fallback hosts 404 too (v13.11: the bare
-  /// per-ayah host and islamic.network are tried before the ZIP,
-  /// so this forces the ZIP path).
+  /// per-ayah host and islamic.network are tried before the bare
+  /// file; v13.12: the alternate hosts sit between them in the
+  /// chain, so they 404 here as well — unless [serveMirror] lets
+  /// the mirror host serve the slow file).
   final bool failFallbackHosts;
+
+  /// When true (with [failFallbackHosts]), the mirror host
+  /// (mirrors.quranicaudio.com) still serves the slow file —
+  /// the v13.12 alternate-host path when www is unavailable.
+  final bool serveMirror;
   final Duration chunkGap;
   final int failAttempts;
   final bool stall;
@@ -464,6 +483,7 @@ class _FakeSlowClient extends http.BaseClient {
     this.zipBytes,
     this.failWww = false,
     this.failFallbackHosts = false,
+    this.serveMirror = false,
     this.chunkGap = Duration.zero,
     this.failAttempts = 0,
     this.stall = false,
@@ -484,14 +504,17 @@ class _FakeSlowClient extends http.BaseClient {
     }
     if (failFallbackHosts &&
         (request.url.host == 'cdn.islamic.network' ||
-            request.url.host == 'everyayah.com') &&
-        !request.url.path.endsWith('.zip')) {
+            request.url.host == 'everyayah.com' ||
+            request.url.host == 'mirrors.quranicaudio.com' ||
+            request.url.host == 'huggingface.co') &&
+        !request.url.path.endsWith('.zip') &&
+        !(serveMirror &&
+            request.url.host == 'mirrors.quranicaudio.com')) {
       return http.StreamedResponse(const Stream.empty(), 404);
     }
     // v13.7: the www per-ayah URL gets the raw per-ayah bytes (so
     // the per-ayah path succeeds first); the ZIP URL gets the real
-    // ZIP bytes (so the ZIP path succeeds when the per-ayah file
-    // is unavailable).
+    // ZIP bytes (so the bulk download succeeds when it requests it).
     final serveBytes = (zipBytes != null &&
             request.url.toString().contains('/zips/'))
         ? zipBytes!
