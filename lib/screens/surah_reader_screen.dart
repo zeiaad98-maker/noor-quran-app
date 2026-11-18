@@ -546,28 +546,29 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
     ).then((_) => _loadNotedAyahs());
   }
 
-  /// Word card (v12 — replaces the v10/v11 tabbed popup): opened by
-  /// tapping a single word on the page. One small card, no tabs:
-  /// word + meaning, toolbar swaps المعنى/صرف/إعراب inside the card.
-  /// [wordIndex] is the TRUE 0-based Uthmani word index from the QCF
-  /// word map; the audio controller takes a 1-based word position,
-  /// so the play callback adds 1.
+  /// Word card (v13.6 — Wahy style): opened by tapping a single
+  /// word on the page. Bottom sheet, ayah header with the tapped
+  /// word in blue, 4 tabs, every button wired (the user's order:
+  /// "فعّلوا كل الأزرار"). [wordIndex] is the TRUE 0-based Uthmani
+  /// word index from the QCF word map; the audio controller takes a
+  /// 1-based word position, so the play callbacks add 1.
   ///
   /// Tapping the verse-end number glyph opens the AYAH SHEET
   /// ([_openAyahSheet]) — play ayah, word chips, notes (v13.5:
   /// the world apps show the ayah sheet for an ayah tap; the
-  /// tafsir card moved to the word card's التفسير button).
+  /// tafsir card moved to the word card's تفاسير button).
   ///
   /// v13.2 (best-apps rule 1): tapping a word plays JUST the word
   /// immediately — the wbw file, never the ayah — and shows the
-  /// compact mini-player bar docked at the bottom of the reader; it
-  /// does NOT open the full player sheet. The card itself opens too
-  /// (meaning + صرف/إعراب), and its "استمع للآية" button is the
-  /// visible ayah-listen control (UX D). The reader's own audio
-  /// button and the ayah sheet still open the full sheet.
+  /// compact mini-player bar docked at the bottom of the reader.
+  /// v13.6: the auto-play honours the word settings toggle
+  /// ([AudioPlayerController.wordAutoPlay]) — when off, the tap
+  /// opens the card only and the green ▶ plays the word.
   void _openWordCard(int surah, int verse, int wordIndex) {
-    unawaited(_audioController.playWord(surah, verse, wordIndex + 1));
-    if (mounted) setState(() => _showMiniBar = true);
+    if (_audioController.wordAutoPlay) {
+      unawaited(_audioController.playWord(surah, verse, wordIndex + 1));
+      if (mounted) setState(() => _showMiniBar = true);
+    }
     showWordCard(
       context: context,
       surah: surah,
@@ -578,15 +579,41 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
         unawaited(_audioController.playWord(surah, verse, word + 1));
         if (mounted) setState(() => _showMiniBar = true);
       },
+      onRepeatWord: (word) {
+        unawaited(_audioController.repeatWord(surah, verse, word + 1));
+        if (mounted) setState(() => _showMiniBar = true);
+      },
       onPlayAyah: () {
         unawaited(_audioController.playAyah(surah, verse));
         if (mounted) setState(() => _showMiniBar = true);
       },
-      // تعليقات opens the ayah sheet (note editor lives there);
-      // التفسير opens the tafsir card. The card pops itself first.
+      onContinueFromAyah: () {
+        unawaited(_audioController.playFromAyah(surah, verse));
+        if (mounted) setState(() => _showMiniBar = true);
+      },
+      onGoToLastReading: _goToLastReading,
+      // ملاحظة opens the ayah sheet (note editor lives there);
+      // تفاسير opens the tafsir card. The card pops itself first.
       onOpenNotes: () => _openAyahSheet(surah, verse),
       onOpenTafsir: () => _openTafsirCard(surah, verse),
+      onOpenReciterPicker: () => showReciterPickerSheet(
+        context: context,
+        controller: _audioController,
+      ),
+      onOpenPlaybackSettings: () => showPlaybackSettingsSheet(
+        context: context,
+        controller: _audioController,
+      ),
     ).then((_) => _loadMarkedAyahs());
+  }
+
+  /// آخر قراءة (v13.6, the word card's button): jump to the page
+  /// the user last read (persisted as 'last_page' on every page
+  /// change). A no-op when nothing was saved yet.
+  Future<void> _goToLastReading() async {
+    final prefs = await SharedPreferences.getInstance();
+    final page = prefs.getInt('last_page');
+    if (page != null && mounted) _jumpToPage(page);
   }
 
   /// Long-press a word plays its whole AYAH (v13.2, UX D /
