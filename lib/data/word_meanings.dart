@@ -5,9 +5,14 @@ import 'package:quran/quran.dart' as quran;
 
 /// Offline Quran word data (Quranpedia dumps, bundled under assets/quran_data):
 /// - word meanings (غريب القرآن — السراج في بيان غريب القرآن، مع التبيان كبديل)
-/// - short in-ayah glosses (مخلوف «كلمات القرآن: تفسير وبيان»، v13.6,
-///   FIRST meaning source) + small additions condensed from التفسير
-///   الميسر where مخلوف has none (e.g. 4:4 فَكُلُوهُ = «فخذوه حلالاً.»)
+/// - Tafsir Center word meanings (v13.11, the user's pick — «ضيف معاني
+///   مركز تفسير»): the Center's own word-by-word compilation, CC BY 4.0,
+///   FIRST meaning source, shown in FULL (never shortened) — it covers
+///   100% of words, so the older sources below are fallback-only.
+/// - short in-ayah glosses (مخلوف «كلمات القرآن: تفسير وبيان»، v13.6)
+///   + small additions condensed from التفسير الميسر where مخلوف has
+///   none (e.g. 4:4 فَكُلُوهُ = «فخذوه حلالاً.») — fallback-only since
+///   v13.11 (the Tafsir Center source above covers every word).
 /// - word lexicon (مفردات ألفاظ القرآن للراغب الأصفهاني، ت ٥٠٢هـ،
 ///   keyed by normalized root; consulted after غريب القرآن)
 /// - التفسير الميسر (كاملاً، آية بآية)
@@ -17,6 +22,7 @@ import 'package:quran/quran.dart' as quran;
 /// All files are loaded lazily on first use and cached in memory.
 class QuranWordData {
   static Map<String, dynamic>? _meanings;
+  static Map<String, dynamic>? _tafsirCenter;
   static Map<String, dynamic>? _makhloof;
   static Map<String, dynamic>? _additions;
   static Map<String, dynamic>? _lexicon;
@@ -47,6 +53,10 @@ class QuranWordData {
     _loading = true;
     final meaningsRaw =
         await rootBundle.loadString('assets/quran_data/word_meanings.json');
+    // Tafsir Center meanings (v13.11) — the primary meaning source,
+    // loaded like غريب القرآن (required, not optional).
+    final tafsirCenterRaw = await rootBundle
+        .loadString('assets/quran_data/word_meanings_tafsircenter.json');
     // مخلوف short glosses + additions are optional like the lexicon:
     // a missing/corrupt file must not break the rest of the word data.
     try {
@@ -79,6 +89,7 @@ class QuranWordData {
     final quartersRaw =
         await rootBundle.loadString('assets/quran_data/hizb_quarters.json');
     _meanings = jsonDecode(meaningsRaw) as Map<String, dynamic>;
+    _tafsirCenter = jsonDecode(tafsirCenterRaw) as Map<String, dynamic>;
     _tafsir = jsonDecode(tafsirRaw) as Map<String, dynamic>;
     _morphology = jsonDecode(morphRaw) as Map<String, dynamic>;
     final quartersJson = jsonDecode(quartersRaw) as List<dynamic>;
@@ -100,14 +111,32 @@ class QuranWordData {
     // mark — drop it, or مُوسَىٰ would no longer match مُوسَى.
     s = s.replaceAll('\u0649\u0670', '\u0649'); // ىٰ -> ى
     s = s.replaceAll('\u0670', '\u0627'); // ٰ -> ا
-    s = s.replaceAll(RegExp(r'[\u064B-\u0655\u0640\u06D6-\u06ED]'), '');
+    // Strip diacritics + tatweel + small marks — INCLUDING the open
+    // tanwin U+08F0–U+08F2 (v13.11 fix): the Tafsir Center asset uses
+    // Uthmani open tanwin (6,643 words, e.g. ءَايَٰتࣱ ends U+08F1)
+    // while the reader's QCF text uses closed tanwin (آيَاتٌ ends
+    // U+064C) — without this the two spellings never match and the
+    // word falls back to the old (possibly wrong) gloss. The range
+    // runs to U+065F to cover the QCF font's U+065E mark (fatha with
+    // two dots, the dammatan in e.g. آيَاتٌ's QCF lookup text).
+    s = s.replaceAll(
+        RegExp(r'[\u064B-\u065F\u0640\u06D6-\u06ED\u08F0-\u08F2]'), '');
     s = s.replaceAll('\u0622', '\u0627'); // آ -> ا
+    // Uthmani hamza+alef IS a madda: ءَايَٰتࣱ (asset/morphology) and
+    // آيَاتٌ (QCF text) are the same word — collapse ءا to ا after
+    // the diacritics are gone, or the match fails (v13.11 fix).
+    s = s.replaceAll('\u0621\u0627', '\u0627'); // ءا -> ا
     s = s.replaceAll('\u0623', '\u0627'); // أ -> ا
     s = s.replaceAll('\u0625', '\u0627'); // إ -> ا
     s = s.replaceAll('\u0671', '\u0627'); // ٱ -> ا
     s = s.replaceAll('\u0649', '\u064A'); // ى -> ي
     s = s.replaceAll('\u0629', '\u0647'); // ة -> ه
     s = s.replaceAll(RegExp(r'\s+'), '');
+    // Last guard: after all the unifications above, a word is ONLY
+    // Arabic letters — drop any mark the ranges above missed (a
+    // stray mark here silently breaks the meaning lookup for that
+    // word, which is exactly how آيَاتٌ lost its meaning).
+    s = s.replaceAll(RegExp(r'[^\u0621-\u064A]'), '');
     return s;
   }
 
@@ -162,6 +191,14 @@ class QuranWordData {
         .toList(growable: false);
   }
 
+  /// Tafsir Center word meanings for an ayah (v13.11), or empty list.
+  /// Same format as [meaningsForAyah] («surah:ayah» → [[word, meaning]]).
+  static Future<List<(String, String)>> tafsirCenterEntriesForAyah(
+      int surah, int verse) async {
+    await ensureLoaded();
+    return _entriesFrom(_tafsirCenter, surah, verse);
+  }
+
   /// مخلوف short in-ayah glosses for an ayah (v13.6), or empty list.
   static Future<List<(String, String)>> makhloofEntriesForAyah(
       int surah, int verse) async {
@@ -178,17 +215,23 @@ class QuranWordData {
   }
 
   /// Meaning of one tapped word, matched by normalized form.
-  /// Priority (v13.6, the user's pick — "ضيف المعاني القصيرة متل وحي
-  /// أول"): additions first, then مخلوف, then غريب القرآن, then the
-  /// root lexicon (مفردات الراغب). The مخلوف / additions glosses are
-  /// short in-ayah explanations (Wahy-style); the غريب and Raghib
-  /// entries are consulted only when neither has the word. v13.2: the
-  /// returned text is [shortenGloss]-shortened, so the word card AND
+  /// Priority (v13.11, the user's pick — «ضيف معاني مركز تفسير»):
+  /// the Tafsir Center meanings FIRST, shown in FULL — never
+  /// [shortenGloss]-shortened (the user approved the small credit
+  /// line instead; cutting the text would lose content and would
+  /// count as an adaptation under CC BY 4.0). It covers 100% of
+  /// words, so the older sources below (additions → مخلوف → غريب
+  /// القرآن → root lexicon) are fallback-only. v13.2: the fallback
+  /// branches ARE [shortenGloss]-shortened, so the word card AND
   /// the meaning sheet both show the short plain gloss (the user:
   /// "اختصر وهيك بس يكون مفهوم المعنى").
   /// Returns null only when no source has anything.
   static Future<String?> meaningForWord(
       int surah, int verse, String word) async {
+    final tafsirCenterEntries =
+        await tafsirCenterEntriesForAyah(surah, verse);
+    final tafsirCenter = _matchWord(tafsirCenterEntries, word);
+    if (tafsirCenter != null) return tafsirCenter;
     final additionEntries = await additionEntriesForAyah(surah, verse);
     final addition = _matchWordStrict(additionEntries, word);
     if (addition != null) return shortenGloss(addition);
@@ -324,10 +367,13 @@ class QuranWordData {
 
   /// Length distribution of the gloss [wordGloss] actually displays
   /// for every word of the Mushaf (same matching as [coverageStats],
-  /// with [shortenGloss] applied to the meaning branches): total
-  /// words, words with a (shortened) meaning, median and max
+  /// with [shortenGloss] applied to the FALLBACK meaning branches):
+  /// total words, words with a (shortened) meaning, median and max
   /// displayed-gloss length, and how many glosses exceed 160 / 120
-  /// chars (v13.2: over160 must be 0).
+  /// chars. v13.11: the Tafsir Center meanings are shown in FULL
+  /// (never shortened), so over160 is no longer 0 — it counts the
+  /// long Tafsir Center entries (11% > 120 chars, max 720). That is
+  /// the user's approved behaviour, not a regression.
   static Future<
       ({
         int total,
@@ -351,20 +397,31 @@ class QuranWordData {
           : (rawMeanings as List<dynamic>)
               .map((e) => (e[0] as String, e[1] as String))
               .toList(growable: false);
+      final tafsirCenterEntries = _entriesFrom(_tafsirCenter, surah, verse);
       final additionEntries = _entriesFrom(_additions, surah, verse);
       final makhloofEntries = _entriesFrom(_makhloof, surah, verse);
       for (final w in ayah.value as List<dynamic>) {
         final word = w[0] as String;
         final desc = w.length >= 2 ? w[1] as String : '';
         String gloss;
-        // v13.6 priority: additions → مخلوف → غريب → Raghib.
-        final addition = _matchWordStrict(additionEntries, word);
-        final makhloof =
-            addition == null ? _matchWordStrict(makhloofEntries, word) : null;
-        final gharib = makhloof == null && addition == null
-            ? _matchWord(meaningEntries, word)
+        // v13.11 priority: Tafsir Center (full text) → additions →
+        // مخلوف → غريب → Raghib.
+        final tafsirCenter = _matchWord(tafsirCenterEntries, word);
+        final addition = tafsirCenter == null
+            ? _matchWordStrict(additionEntries, word)
             : null;
-        if (addition != null) {
+        final makhloof =
+            addition == null && tafsirCenter == null
+                ? _matchWordStrict(makhloofEntries, word)
+                : null;
+        final gharib =
+            makhloof == null && addition == null && tafsirCenter == null
+                ? _matchWord(meaningEntries, word)
+                : null;
+        if (tafsirCenter != null) {
+          gloss = tafsirCenter;
+          withShortMeaning++;
+        } else if (addition != null) {
           gloss = shortenGloss(addition);
           withShortMeaning++;
         } else if (makhloof != null) {
@@ -471,13 +528,15 @@ class QuranWordData {
   }
 
   /// A gloss for a tapped word that NEVER returns blank for a real word:
-  /// the غريب القرآن meaning when present, else the root-lexicon
-  /// definition, else the (real, bundled) morphology description
-  /// (type/root/pattern — e.g. "حرف جر" for عَلَيْكَ), else a plain
-  /// statement that it is a Quranic word. Nothing here is invented:
-  /// every branch comes from a bundled source. v13.2: meaning
-  /// branches are [shortenGloss]-shortened (≤ 160 chars); the
-  /// morphology fallback is already short (measured max 145 chars).
+  /// the Tafsir Center meaning when present (v13.11 — shown in FULL,
+  /// never shortened), else the غريب القرآن meaning, else the
+  /// root-lexicon definition, else the (real, bundled) morphology
+  /// description (type/root/pattern — e.g. "حرف جر" for عَلَيْكَ), else
+  /// a plain statement that it is a Quranic word. Nothing here is
+  /// invented: every branch comes from a bundled source. v13.2:
+  /// the fallback meaning branches are [shortenGloss]-shortened
+  /// (≤ 160 chars); the morphology fallback is already short
+  /// (measured max 145 chars).
   static Future<String> wordGloss(
       int surah, int verse, String word) async {
     final meaning = await meaningForWord(surah, verse, word);
@@ -488,13 +547,19 @@ class QuranWordData {
   }
 
   /// Which source [wordGloss] draws on for this word, so the UI can
-  /// label it honestly: 'addition' (short gloss condensed from
-  /// التفسير الميسر), 'makhloof' (مخلوف «كلمات القرآن»), 'gharib'
-  /// (غريب القرآن), 'lexicon' (مفردات الراغب، مادة الجذر), 'morph'
-  /// (الوصف الصرفي فقط), or 'none' (word not found in any bundled
-  /// source).
+  /// label it honestly: 'tafsircenter' (مركز تفسير للدراسات القرآنية,
+  /// v13.11 — the card shows the small credit line for it),
+  /// 'addition' (short gloss condensed from التفسير الميسر),
+  /// 'makhloof' (مخلوف «كلمات القرآن»), 'gharib' (غريب القرآن),
+  /// 'lexicon' (مفردات الراغب، مادة الجذر), 'morph' (الوصف الصرفي
+  /// فقط), or 'none' (word not found in any bundled source).
   static Future<String> glossSourceForWord(
       int surah, int verse, String word) async {
+    final tafsirCenterEntries =
+        await tafsirCenterEntriesForAyah(surah, verse);
+    if (_matchWord(tafsirCenterEntries, word) != null) {
+      return 'tafsircenter';
+    }
     final additionEntries = await additionEntriesForAyah(surah, verse);
     if (_matchWordStrict(additionEntries, word) != null) return 'addition';
     final makhloofEntries = await makhloofEntriesForAyah(surah, verse);
@@ -514,7 +579,8 @@ class QuranWordData {
   /// either meaning, and words with any non-blank gloss (meaning or
   /// morphology description). The per-source counts are independent
   /// (a word can match several sources); [withMeaning] is the union
-  /// in priority order (additions → مخلوف → غريب → lexicon).
+  /// in priority order (v13.11: Tafsir Center → additions → مخلوف →
+  /// غريب → lexicon).
   static Future<
       ({
         int total,
@@ -546,10 +612,13 @@ class QuranWordData {
               .toList(growable: false);
       final additionEntries = _entriesFrom(_additions, surah, verse);
       final makhloofEntries = _entriesFrom(_makhloof, surah, verse);
+      final tafsirCenterEntries = _entriesFrom(_tafsirCenter, surah, verse);
       for (final w in ayah.value as List<dynamic>) {
         final word = w[0] as String;
         final desc = w.length >= 2 ? w[1] as String : '';
         total++;
+        final hasTafsirCenter =
+            _matchWord(tafsirCenterEntries, word) != null;
         final hasAddition =
             _matchWordStrict(additionEntries, word) != null;
         final hasMakhloof =
@@ -560,10 +629,15 @@ class QuranWordData {
         if (hasMakhloof) withMakhloof++;
         if (hasGharib) withGharib++;
         if (hasLexicon) withLexicon++;
-        if (hasAddition || hasMakhloof || hasGharib || hasLexicon) {
+        if (hasTafsirCenter ||
+            hasAddition ||
+            hasMakhloof ||
+            hasGharib ||
+            hasLexicon) {
           withMeaning++;
         }
-        if (hasAddition ||
+        if (hasTafsirCenter ||
+            hasAddition ||
             hasMakhloof ||
             hasGharib ||
             hasLexicon ||

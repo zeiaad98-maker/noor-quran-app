@@ -131,6 +131,15 @@ const List<Reciter> reciters = [
     server: 'cdn.mp3quran.net/audio/yasser-dosari/r1',
     everyayah: 'Yasser_Ad-Dussary_128kbps',
   ),
+  // أحمد بن علي العجمي (v13.11, user order 2026-11-18): everyayah
+  // folder, mp3quran server and islamic.network edition all
+  // verified live (200) before adding — no Quran.com recitation
+  // id verified, so none is set (do not invent one).
+  Reciter(
+    name: 'أحمد بن علي العجمي',
+    server: 'cdn.mp3quran.net/audio/ahmad-ajmi/r1',
+    everyayah: 'ahmed_ibn_ali_al_ajamy_128kbps',
+  ),
 ];
 
 /// `SSSAAA` file name used by everyayah and by Quran.com ayah audio.
@@ -168,6 +177,77 @@ String everyayahWwwUrl(Reciter reciter, int surah, int ayah) =>
 String everyayahSurahZipUrl(Reciter reciter, int surah) =>
     'http://www.everyayah.com/data/${reciter.everyayah}/zips/'
     '${surah.toString().padLeft(3, '0')}.zip';
+
+/// Global ayah number (1-based, counting from 1:1): the key
+/// islamic.network addresses per-ayah audio by (e.g. 7:1 = 955).
+int globalAyahNumber(int surah, int ayah) {
+  var n = ayah;
+  for (var s = 1; s < surah; s++) {
+    n += quran.getVerseCount(s);
+  }
+  return n;
+}
+
+/// Per-ayah mp3 of [reciter] from islamic.network (v13.11) — a
+/// DIFFERENT host from everyayah.com, for when everyayah is
+/// unreachable from the user's network: the user gets "تعذّر تحميل
+/// الصوت" on strong internet (2026-11-18, page 151) because every
+/// fallback above is the same everyayah host. Verified by CONTENT
+/// (2026-11-18): islamic.network's files are the exact same
+/// recordings as everyayah's — identical transcripts AND
+/// bit-identical decoded PCM on sampled ayahs (Hani Rifai 4 ayahs;
+/// الحصري، العفاسي، عبد الباسط، المعيقلي، إبراهيم الأخضر،
+/// الشاطري، سويد، السديس 2 ayahs each; الحذيفي 3/4 bit-identical
+/// + one different take; الشريم والعجمي transcript-verified,
+/// 64k vs 128k so not bit-identical). Only editions verified that
+/// way are listed here — never add a reciter on a name match alone.
+/// Tunaiji has NO per-ayah files here (the API serves that edition
+/// surah-by-surah only), so he stays everyayah-only — same for
+/// محمد الطبلاوي and ياسر الدوسري (editions exist, 403 per-ayah).
+/// المنشاوي is also excluded: islamic.network's ar.minshawimujawwad
+/// is the murattal recording under a mujawwad name (verified
+/// 2026-11-18). Null when the reciter has no verified edition.
+/// عجمي caveat: his surah-first ayahs on islamic.network carry a
+/// Basmala prefix (~2.5 s) before the ayah — mid-surah ayahs are
+/// clean. As a fallback that beats silence, and the Basmala is
+/// recited before most surahs anyway.
+String? islamicNetworkUrl(Reciter reciter, int surah, int ayah) {
+  // Verified by CONTENT (identical transcripts + bit-identical
+  // decoded PCM on sampled ayahs, 2026-11-18) — only these.
+  // (edition, kbps): Akhdar's per-ayah files live on the 32 kbps
+  // path (the 64 path 403s); everyone else is 64.
+  // Caveats (documented, not hidden): الحذيفي is bit-identical
+  // on 3/4 sampled ayahs — 2:255 is the same voice's different
+  // take (59.85 s vs 59.09 s). الشريم is transcript-verified
+  // (correct ayah, right voice, durations within 0.03 s) but
+  // 0/4 bit-identical — a different performance of the same
+  // reciter. Both stay mapped: as a FALLBACK the right ayah in
+  // the right voice beats silence.
+  // NOT المنشاوي: islamic.network's ar.minshawimujawwad is the
+  // murattal recording under a mujawwad name (its 2:255 is
+  // byte-identical to ar.minshawi) — mapping it would play the
+  // wrong style where mujawwad is expected, so he stays
+  // everyayah-only. Never add a reciter on a name match alone.
+  const editions = {
+    'Hani_Rifai_64kbps': ('ar.hanirifai', 64),
+    'Husary_64kbps': ('ar.husary', 64),
+    'Alafasy_64kbps': ('ar.alafasy', 64),
+    'Abdul_Basit_Murattal_64kbps': ('ar.abdulbasitmurattal', 64),
+    'Maher_AlMuaiqly_64kbps': ('ar.mahermuaiqly', 64),
+    'Ibrahim_Akhdar_32kbps': ('ar.ibrahimakhbar', 32),
+    'ahmed_ibn_ali_al_ajamy_128kbps': ('ar.ahmedajamy', 64),
+    'Hudhaify_64kbps': ('ar.hudhaify', 64),
+    'Abu_Bakr_Ash-Shaatree_64kbps': ('ar.shaatree', 64),
+    'Ayman_Sowaid_64kbps': ('ar.aymanswoaid', 64),
+    'Saood_ash-Shuraym_64kbps': ('ar.saoodshuraym', 64),
+    'Abdurrahmaan_As-Sudais_64kbps': ('ar.abdurrahmaansudais', 64),
+  };
+  final entry = editions[reciter.everyayah];
+  if (entry == null) return null;
+  final (edition, kbps) = entry;
+  return 'https://cdn.islamic.network/quran/audio/$kbps/$edition/'
+      '${globalAyahNumber(surah, ayah)}.mp3';
+}
 
 /// Full-surah mp3 of [reciter] from mp3quran.net (fallback only —
 /// the player normally plays the surah as a sequence of ayah files).
