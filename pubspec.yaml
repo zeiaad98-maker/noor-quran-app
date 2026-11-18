@@ -59,6 +59,8 @@ flutter:
   assets:
     - assets/quran_data/word_meanings.json
     - assets/quran_data/word_meanings_tafsircenter.json
+    - assets/quran_data/word_sarf_tafsircenter.json
+    - assets/quran_data/word_irab_tafsircenter.json
     - assets/quran_data/word_glosses_makhloof.json
     - assets/quran_data/word_gloss_additions.json
     - assets/quran_data/word_lexicon.json

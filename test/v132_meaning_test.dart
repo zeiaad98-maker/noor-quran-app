@@ -171,9 +171,13 @@ void main() {
     // additions lifted it from 49,054 / 63.4% to 50,411 / 65.1%).
     expect(stats.withShortMeaning, stats.total);
     // v13.11: Tafsir Center meanings are shown in FULL, so long
-    // entries exist (measured: 4,636 over 160 chars, max 717) —
-    // that is the approved behaviour, not a regression.
-    expect(stats.over160, 4636);
+    // entries exist (measured: 4,632 over 160 chars, max 717) —
+    // that is the approved behaviour, not a regression. (Was 4,636
+    // before the final-vowel tie-break in _matchWord: repeated
+    // words now get their own case's entry, whose text is sometimes
+    // shorter/longer — verified: first-match 4,636/8,296,
+    // tie-break 4,632/8,316.)
+    expect(stats.over160, 4632);
     expect(stats.maxLength, 717);
     // Median displayed gloss is still a short phrase (35 chars).
     expect(stats.medianLength, lessThanOrEqualTo(120));

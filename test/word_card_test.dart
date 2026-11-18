@@ -259,24 +259,32 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('tabs switch: التصريف fields, الإعراب morph + note, '
-        'القراءات honest empty for 3:7', (tester) async {
+    testWidgets('tabs switch: التصريف + الإعراب show the Tafsir Center '
+        'texts in full, القراءات honest empty for 3:7', (tester) async {
       set411(tester);
       await openCard(tester);
 
+      // v13.11: the التصريف tab shows the Tafsir Center sarf in
+      // full (with the small credit line), not the parsed
+      // simplified fields.
       await tester.tap(find.byKey(const ValueKey('tabSarf')));
       await tester.pump();
-      expect(find.text('حكم'), findsOneWidget);
-      expect(find.textContaining('جمع مؤنث سالم'), findsOneWidget);
+      expect(find.textContaining('مُفْرَدُهُ: (مُحْكَمَةٌ)'), findsOneWidget);
+      expect(find.textContaining('اسْمُ مَفْعُولٍ'), findsOneWidget);
+      expect(
+          find.text('المصدر: مركز تفسير للدراسات القرآنية — tafsir.net'),
+          findsOneWidget);
 
+      // v13.11: the الإعراب tab shows the Tafsir Center per-word
+      // i'rab in full (with the credit line) — the simplified
+      // morphology text and its disclaimer are gone.
       await tester.tap(find.byKey(const ValueKey('tabIrab')));
       await tester.pump();
+      expect(find.textContaining('نَعْتٌ مَرْفُوعٌ'), findsOneWidget);
       expect(
-        find.text(
-            'اسم مفعول مرفوع، جمع مؤنث، نعت، نكرة، الجذر (حكم)، الوزن (أَفْعَلَ)'),
-        findsOneWidget,
-      );
-      expect(find.textContaining('الإعراب هنا مبسّط'), findsOneWidget);
+          find.text('المصدر: مركز تفسير للدراسات القرآنية — tafsir.net'),
+          findsOneWidget);
+      expect(find.textContaining('الإعراب هنا مبسّط'), findsNothing);
 
       // 3:7 has no qiraat variant in the bundled data — the tab says
       // so honestly instead of inventing one.

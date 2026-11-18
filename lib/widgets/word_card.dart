@@ -275,6 +275,14 @@ class _WordCardState extends State<WordCard> {
   // the الإعراب tab already shows).
   String? _glossSource;
   String? _morph;
+  // v13.11: Tafsir Center sarf + per-word i'rab (full text) and
+  // their sources ('tafsircenter' / 'morph' / 'none') — the
+  // التصريف/الإعراب tabs show the Center's text first, with the
+  // small credit line, and fall back to the simplified morphology.
+  String? _sarf;
+  String? _irab;
+  String? _sarfSource;
+  String? _irabSource;
   List<QiraatVariant> _qiraatForWord = const [];
   List<QiraatVariant> _qiraatForAyah = const [];
   bool _loading = true;
@@ -343,6 +351,12 @@ class _WordCardState extends State<WordCard> {
       QuranWordData.hizbQuarterLabel(widget.surah, widget.verse),
       QuranWordData.glossSourceForWord(
           widget.surah, widget.verse, _lookupText),
+      QuranWordData.sarfForWord(widget.surah, widget.verse, _lookupText),
+      QuranWordData.irabForWord(widget.surah, widget.verse, _lookupText),
+      QuranWordData.sarfSourceForWord(
+          widget.surah, widget.verse, _lookupText),
+      QuranWordData.irabSourceForWord(
+          widget.surah, widget.verse, _lookupText),
     ]);
     if (!mounted || index != _wordIndex) return;
     setState(() {
@@ -355,6 +369,10 @@ class _WordCardState extends State<WordCard> {
       _hasNote = _noteText != null;
       _quarterLabel = results[6] as String?;
       _glossSource = results[7] as String?;
+      _sarf = results[8] as String?;
+      _irab = results[9] as String?;
+      _sarfSource = results[10] as String?;
+      _irabSource = results[11] as String?;
       _loading = false;
     });
   }
@@ -949,6 +967,30 @@ class _WordCardState extends State<WordCard> {
   }
 
   Widget _sarfBody() {
+    // v13.11: Tafsir Center sarf FIRST — the Center's full analysis
+    // (avg ~157 chars), shown in FULL, never shortened, with the
+    // small approved credit line (CC BY 4.0 attribution, same line
+    // as the المعنى tab). The parsed simplified morphology below is
+    // fallback-only (the Center covers 100%, so it should never
+    // fire — verified by the coverage test).
+    if (_sarfSource == 'tafsircenter' && _sarf != null) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            _sarf!,
+            textAlign: TextAlign.center,
+            style: GoogleFonts.amiri(fontSize: 18),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'المصدر: مركز تفسير للدراسات القرآنية — tafsir.net',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.amiri(fontSize: 12, color: Colors.grey),
+          ),
+        ],
+      );
+    }
     final morph = _morph;
     if (morph == null) {
       return Text(
@@ -998,14 +1040,31 @@ class _WordCardState extends State<WordCard> {
     );
   }
 
-  /// Simplified i'rab from the bundled morphology data (v12
-  /// behaviour, kept in v13.6): the tab says plainly that this is
-  /// a simplification, NOT a full per-word i'rab — the full data
-  /// (الجدول في إعراب القرآن) is a book on quranpedia.net, not a
-  /// per-word dataset, and wiring it is a separate data project.
-  /// Nothing here is invented: every line comes from the morphology
-  /// description.
+  /// Per-word i'rab (v13.11): the Tafsir Center's full per-word
+  /// analysis FIRST, shown in FULL with the small credit line. The
+  /// simplified morphology display below is fallback-only (the
+  /// Center covers 100%, so it should never fire — verified by the
+  /// coverage test); its honest disclaimer stays, because when it
+  /// shows, it IS a simplification, not a full i'rab.
   Widget _irabBody() {
+    if (_irabSource == 'tafsircenter' && _irab != null) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            _irab!,
+            textAlign: TextAlign.center,
+            style: GoogleFonts.amiri(fontSize: 18),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'المصدر: مركز تفسير للدراسات القرآنية — tafsir.net',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.amiri(fontSize: 12, color: Colors.grey),
+          ),
+        ],
+      );
+    }
     final morph = _morph;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
