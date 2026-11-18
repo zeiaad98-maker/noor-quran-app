@@ -133,7 +133,8 @@ void main() {
 
     test('slow ZIP download succeeds when the www per-ayah file is '
         'unavailable', () async {
-      // Same slow stream, but the www per-ayah file 404s, so the
+      // Same slow stream, but the www per-ayah file 404s — and the
+      // small fallbacks (islamic.network, bare) 404 too — so the
       // ZIP path runs: progress ends at the ZIP's own total.
       AudioDownloadService.stallTimeout = const Duration(seconds: 1);
       final bytes = List<int>.generate(1000, (i) => i % 256);
@@ -143,6 +144,7 @@ void main() {
         bytes: bytes,
         zipBytes: zipBytes,
         failWww: true,
+        failFallbackHosts: true,
         chunkGap: const Duration(milliseconds: 250),
       );
       await buildService(client);
@@ -443,6 +445,11 @@ class _FakeSlowClient extends http.BaseClient {
   /// When true, the www per-ayah host 404s (v13.7: the www file is
   /// tried first, so this forces the ZIP path).
   final bool failWww;
+
+  /// When true, the small fallback hosts 404 too (v13.11: the bare
+  /// per-ayah host and islamic.network are tried before the ZIP,
+  /// so this forces the ZIP path).
+  final bool failFallbackHosts;
   final Duration chunkGap;
   final int failAttempts;
   final bool stall;
@@ -456,6 +463,7 @@ class _FakeSlowClient extends http.BaseClient {
     required this.bytes,
     this.zipBytes,
     this.failWww = false,
+    this.failFallbackHosts = false,
     this.chunkGap = Duration.zero,
     this.failAttempts = 0,
     this.stall = false,
@@ -471,6 +479,12 @@ class _FakeSlowClient extends http.BaseClient {
     }
     if (failWww &&
         request.url.host == 'www.everyayah.com' &&
+        !request.url.path.endsWith('.zip')) {
+      return http.StreamedResponse(const Stream.empty(), 404);
+    }
+    if (failFallbackHosts &&
+        (request.url.host == 'cdn.islamic.network' ||
+            request.url.host == 'everyayah.com') &&
         !request.url.path.endsWith('.zip')) {
       return http.StreamedResponse(const Stream.empty(), 404);
     }

@@ -8,20 +8,29 @@ void main() {
   test('word data loads and matches known words', () async {
     await QuranWordData.ensureLoaded();
 
-    // 2:7 — خَتَمَ: مخلوف (v13.6) glosses the phrase «خَتَمَ اللَّهُ»
-    // as «طبع الله»; غِشَاوَةٌ too.
+    // 2:7 — خَتَمَ: v13.11, the Tafsir Center meaning (first source),
+    // shown in full — the dictionary-style entry on the ختم root.
+    // (v13.6: مخلوف glossed the phrase «خَتَمَ اللَّهُ» as «طبع الله»;
+    // that gloss is now fallback-only.)
     final m1 = await QuranWordData.meaningForWord(2, 7, 'خَتَمَ');
     expect(m1, isNotNull);
-    expect(m1, 'طبع الله');
+    expect(
+        m1,
+        'الخاء والتاء والميم أصلٌ واحد، وهو بلوغ آخر الشيء. '
+        'يُقال ختمت العمل، وختم القارئ السورة. فأما الختم، وهو الطبع '
+        'على الشيء، فذلك من الباب أيضا; لأن الطبع على الشيء لا يكون '
+        'إلا بعد بلوغ آخره، والمراد: طبع عليها وجعلها لا تعقل شيئاً، '
+        'ولا ينفذ إليها الإيمان.');
     expect(await QuranWordData.glossSourceForWord(2, 7, 'خَتَمَ'),
-        'makhloof');
+        'tafsircenter');
 
     final m2 = await QuranWordData.meaningForWord(2, 7, 'غِشَاوَةٌ');
     expect(m2, isNotNull);
 
-    // Common word with no special meaning -> null (fallback path).
+    // v13.11: عَلَىٰ has a Tafsir Center meaning too («حرف جر، يفيد
+    // معنى الاستعلاء») — it no longer falls through to null.
     final m3 = await QuranWordData.meaningForWord(2, 7, 'عَلَىٰ');
-    expect(m3, isNull);
+    expect(m3, 'حرف جر، يفيد معنى الاستعلاء');
 
     // Tafsir Muyassar covers every ayah.
     final t = await QuranWordData.tafsirForAyah(1, 1);

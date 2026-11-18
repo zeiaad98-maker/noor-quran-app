@@ -173,7 +173,9 @@ void main() {
 
       await openCard(tester);
       expect(blueWord(words[7].text), findsOneWidget);
-      expect(find.textContaining('واضحات لا احتمال فيها ولا اشباه'),
+      // v13.11: the Tafsir Center meaning for مُّحْكَمَاتٌ.
+      expect(
+          find.textContaining('واضحة المعنى، بعيدة عن الاحتمال'),
           findsOneWidget);
 
       // Switch to the word before it, from inside the card.
@@ -184,17 +186,17 @@ void main() {
       expect(find.byType(WordCard), findsOneWidget);
       expect(blueWord(words[6].text), findsOneWidget);
       expect(blueWord(words[7].text), findsNothing);
-      // The old word's gloss is gone. آيَاتٌ has no short meaning in
-      // any source — its wordGloss is the generic fallback — so since
-      // v13.9 the المعنى tab says so honestly instead of showing the
-      // generic fallback text (the old probe asserted that text).
-      expect(find.textContaining('واضحات لا احتمال فيها ولا اشباه'),
+      // The old word's gloss is gone. v13.11: آيَاتٌ HAS a Tafsir
+      // Center meaning now — the card shows it (the v13.9 honest
+      // "no meaning" line no longer appears for any word).
+      expect(find.textContaining('واضحة المعنى، بعيدة عن الاحتمال'),
           findsNothing);
       expect(await QuranWordData.wordGloss(3, 7, words[6].lookupText),
-          'كلمة من كلمات القرآن الكريم');
+          'الآية من كتاب الله، هي: طائفةٌ من القرآن يتصل بعضها ببعض إلى انقطاعها، طويلةً كانت أو قصيرة.');
+      expect(find.textContaining('طائفةٌ من القرآن'), findsOneWidget);
       expect(
           find.text('لا يوجد معنى مختصر لهذه الكلمة في المصادر المتوفرة.'),
-          findsOneWidget);
+          findsNothing);
       expect(tester.takeException(), isNull);
     });
 
@@ -236,7 +238,8 @@ void main() {
 
       expect(find.byType(WordCard), findsOneWidget);
       expect(blueWord(words[7].text), findsOneWidget);
-      expect(find.textContaining('واضحات لا احتمال فيها ولا اشباه'),
+      // v13.11: the Tafsir Center meaning for مُّحْكَمَاتٌ.
+      expect(find.textContaining('واضحة المعنى، بعيدة عن الاحتمال'),
           findsOneWidget);
       expect(tester.takeException(), isNull);
     });

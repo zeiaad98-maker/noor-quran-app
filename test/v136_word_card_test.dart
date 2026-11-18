@@ -181,9 +181,11 @@ void main() {
         await QuranWordData.wordGloss(4, 4, 'فَكُلُوهُ'),
         'فخذوه حلالاً.',
       );
+      // v13.11: the Tafsir Center text is identical here, but it is
+      // the first source now — 'tafsircenter', not 'addition'.
       expect(
         await QuranWordData.glossSourceForWord(4, 4, 'فَكُلُوهُ'),
-        'addition',
+        'tafsircenter',
       );
     });
   });

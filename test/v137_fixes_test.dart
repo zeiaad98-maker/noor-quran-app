@@ -83,7 +83,8 @@ void main() {
       ]);
     });
 
-    test('www per-ayah 404 falls back to the ZIP', () async {
+    test('www and bare per-ayah 404 fall back to the ZIP (v13.11 order)',
+        () async {
       final requested = <String>[];
       final zipBytes = buildSurahZip(
         {'002033.mp3': [3, 3, 3]},
@@ -97,6 +98,9 @@ void main() {
         if (request.url.host == 'www.everyayah.com') {
           return http.Response.bytes([], 404);
         }
+        if (request.url.host == 'everyayah.com') {
+          return http.Response.bytes([], 404);
+        }
         return http.Response.bytes([7], 200);
       }));
 
@@ -105,6 +109,7 @@ void main() {
       expect(await file!.readAsBytes(), [3, 3, 3]);
       expect(requested, [
         'http://www.everyayah.com/data/khalefa_al_tunaiji_64kbps/002033.mp3',
+        'https://everyayah.com/data/khalefa_al_tunaiji_64kbps/002033.mp3',
         'http://www.everyayah.com/data/khalefa_al_tunaiji_64kbps/zips/002.zip',
       ]);
     });

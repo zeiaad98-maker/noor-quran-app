@@ -13,6 +13,14 @@ import 'package:noor_quran/data/word_meanings.dart';
 /// keeps the next sentence/clause, so the meaning stays UNDERSTOOD
 /// (the user's condition: "اختصر وهيك بس يكون مفهوم المعنى").
 /// Truncation only shortens; nothing is rewritten or invented.
+///
+/// v13.11: the Tafsir Center meanings are now the FIRST source and
+/// are shown in FULL (never shortened) — so the wordGloss samples
+/// below pin the Center's text, and the ≤ 160-char invariant no
+/// longer holds for displayed glosses (measured over160 = 4,642,
+/// max 720). The shortenGloss unit tests still apply to the
+/// FALLBACK branches (additions / مخلوف / غريب / Raghib) and to the
+/// function itself.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -78,56 +86,52 @@ void main() {
   });
 
   group('sample words from the user report', () {
-    test('2:36 فَأَخْرَجَهُمَا — short, plain, understood', () async {
+    test('2:36 فَأَخْرَجَهُمَا — Tafsir Center meaning, in full', () async {
       final word = await wordInAyah(2, 36, 'فَأَخْرَجَهُمَا');
       final gloss = await QuranWordData.wordGloss(2, 36, word);
       // Printed so the run log records the exact displayed text.
       // ignore: avoid_print
       print('GLOSS 2:36 فَأَخْرَجَهُمَا = "$gloss" (${gloss.length} chars)');
-      expect(gloss, 'خَرَجَ خُرُوجاً: برز من مقرّه أو حاله');
+      expect(gloss, 'فتسبب في إخراجهما. والإخراج: الإبعاد والطرد والتنحية.');
       expect(gloss.length, lessThanOrEqualTo(160));
-      // It comes from the Raghib root lexicon (no غريب entry here).
+      // v13.11: it comes from the Tafsir Center (first source).
       expect(await QuranWordData.glossSourceForWord(2, 36, word),
-          'lexicon');
-      // Understandability: "خرج خروجاً: برز من مقره أو حاله" — a
-      // plain reader learns فَأَخْرَجَهُمَا = he brought them OUT
-      // (of where they were). The old text ran 130 chars of
-      // dictionary elaboration; the core definition is kept whole.
+          'tafsircenter');
+      // Understandability: "فتسبب في إخراجهما" — a plain reader
+      // learns فَأَخْرَجَهُمَا = he caused them to be brought OUT
+      // (of where they were).
     });
 
-    test('5:4 وَاتَّقُوا — short, plain, understood', () async {
+    test('5:4 وَاتَّقُوا — Tafsir Center meaning, in full', () async {
       final word = await wordInAyah(5, 4, 'وَاتَّقُوا');
       final gloss = await QuranWordData.wordGloss(5, 4, word);
       // ignore: avoid_print
       print('GLOSS 5:4 وَاتَّقُوا = "$gloss" (${gloss.length} chars)');
       expect(gloss,
-          'الوِقَايَةُ: حفظُ الشيءِ ممّا يؤذيه ويضرّه. يقال: وَقَيْتُ الشيءَ أَقِيهِ وِقَايَةً ووِقَاءً');
+          'احذروا واجعلوا لكم وقاية تحميكم وتقيكم. والتقوى: أن يجعل العبد بينه وبين غضب الله وعقابه وقاية؛ بفعل أمره وترك معصيته.');
       expect(gloss.length, lessThanOrEqualTo(160));
       expect(
-          await QuranWordData.glossSourceForWord(5, 4, word), 'lexicon');
-      // Understandability: "الوقاية: حفظ الشيء مما يؤذيه ويضره" —
-      // a plain reader learns وَاتَّقُوا = guard/protect yourselves
-      // (from what harms you). The old text was this same entry
-      // unshortened; here the whole entry already fits, so nothing
-      // is lost — the fix matters for the long entries, not this one.
+          await QuranWordData.glossSourceForWord(5, 4, word), 'tafsircenter');
+      // Understandability: "احذروا واجعلوا لكم وقاية" — a plain
+      // reader learns وَاتَّقُوا = guard/protect yourselves (from
+      // what harms you).
     });
 
-    test('every word of 2:36 and 5:4 shows a gloss ≤ 160 chars',
-        () async {
+    test('every word of 2:36 and 5:4 shows a non-empty gloss', () async {
       for (final (surah, verse) in [(2, 36), (5, 4)]) {
         final words = await QuranWordData.wordsForAyah(surah, verse);
         for (final w in words) {
           final gloss = await QuranWordData.wordGloss(surah, verse, w);
-          expect(gloss.length, lessThanOrEqualTo(160),
-              reason: 'gloss for $w in $surah:$verse is ${gloss.length} '
-                  'chars: "$gloss"');
+          // v13.11: Tafsir Center meanings are shown in full, so a
+          // gloss may exceed 160 chars — it must only be non-empty.
           expect(gloss.trim(), isNotEmpty);
         }
       }
     });
   });
 
-  test('sample across the Mushaf: every gloss ≤ 160 chars', () async {
+  test('sample across the Mushaf: every sampled word shows a gloss',
+      () async {
     // First 3 ayahs of a spread of surahs (short + long, Makki + Madani).
     const picks = [
       (1, 1), (1, 2), (1, 3),
@@ -143,14 +147,14 @@ void main() {
       final words = await QuranWordData.wordsForAyah(surah, verse);
       for (final w in words) {
         final gloss = await QuranWordData.wordGloss(surah, verse, w);
-        expect(gloss.length, lessThanOrEqualTo(160),
-            reason: 'gloss for $w in $surah:$verse is ${gloss.length} '
-                'chars: "$gloss"');
+        // v13.11: full Tafsir Center text — non-empty is the check.
+        expect(gloss.trim(), isNotEmpty,
+            reason: 'blank gloss for $w in $surah:$verse');
       }
     }
   });
 
-  test('corpus: short-gloss coverage and length stats', () async {
+  test('corpus: meaning coverage and length stats', () async {
     final stats = await QuranWordData.glossLengthStats();
     final coverage = await QuranWordData.coverageStats();
     // ignore: avoid_print
@@ -159,17 +163,19 @@ void main() {
         'medianLength=${stats.medianLength} maxLength=${stats.maxLength} '
         'over160=${stats.over160} over120=${stats.over120}');
     expect(stats.total, 77429);
-    // Shortening never drops a meaning: same count as before.
+    // Showing the meaning never drops it: same count as before.
     expect(stats.withShortMeaning, coverage.withMeaning);
-    expect(stats.withShortMeaning, 50411);
-    // 50,411 / 77,429 = 65.1% of words have a short meaning gloss
-    // (v13.6: مخلوف + additions lift it from 49,054 / 63.4%;
-    // v13.9 adds 2 more verified additions: 15:11، 15:12).
-    expect(stats.withShortMeaning / stats.total, greaterThan(0.65));
-    // NO displayed gloss exceeds the 160-char cap.
-    expect(stats.over160, 0);
-    expect(stats.maxLength, lessThanOrEqualTo(160));
-    // Median displayed gloss is a short phrase, not a dictionary page.
+    expect(stats.withShortMeaning, 77429);
+    // 77,429 / 77,429 = 100% of words have a meaning gloss (v13.11:
+    // the Tafsir Center source covers every word; v13.6 مخلوف +
+    // additions lifted it from 49,054 / 63.4% to 50,411 / 65.1%).
+    expect(stats.withShortMeaning, stats.total);
+    // v13.11: Tafsir Center meanings are shown in FULL, so long
+    // entries exist (measured: 4,636 over 160 chars, max 717) —
+    // that is the approved behaviour, not a regression.
+    expect(stats.over160, 4636);
+    expect(stats.maxLength, 717);
+    // Median displayed gloss is still a short phrase (35 chars).
     expect(stats.medianLength, lessThanOrEqualTo(120));
   });
 
@@ -177,20 +183,22 @@ void main() {
       () async {
     final words = await QuranWordData.wordsForAyah(2, 29);
     // The PLURAL سَمَاوَاتِ (not the singular السَّمَاءِ in the مخلوف
-    // phrase «اسْتَوَى إِلَى السَّمَاءِ», which مخلوف now glosses):
-    // مخلوف has no gloss for the plural, so it still falls through
-    // to the Raghib root lexicon.
+    // phrase «اسْتَوَى إِلَى السَّمَاءِ», which مخلوف now glosses).
     final found = words.firstWhere(
       (w) => QuranWordData.normalizeArabic(w).contains('سماوات'),
       orElse: () => '',
     );
     expect(found, isNotEmpty,
         reason: 'no plural سَمَاوَاتِ word in 2:29 (words: $words)');
+    // The Raghib root-lexicon entry is unchanged (fallback source).
     final lex = await QuranWordData.lexiconForWord(2, 29, found);
     expect(lex, isNotNull);
     expect(lex!, startsWith('سَمَاءُ كلّ شيء: أعلاه'));
+    // v13.11: the displayed gloss now comes from the Tafsir Center
+    // (first source) — «ما يقابل الأرض، وعددها سبع، ولها أبواب تفتح.»
     final gloss = await QuranWordData.wordGloss(2, 29, found);
-    expect(gloss, startsWith('سَمَاءُ كلّ شيء: أعلاه'));
-    expect(gloss.length, lessThanOrEqualTo(160));
+    expect(gloss, startsWith('ما يقابل الأرض، وعددها سبع'));
+    expect(await QuranWordData.glossSourceForWord(2, 29, found),
+        'tafsircenter');
   });
 }
