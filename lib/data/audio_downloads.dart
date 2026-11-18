@@ -22,18 +22,20 @@ typedef DownloadCancelCheck = bool Function();
 /// Per-reciter audio downloads (v12): the full Mushaf or selected
 /// surahs, downloaded in the background and played offline after.
 ///
-/// * Source (v13.5, reordered v13.7): the per-ayah file over the
-///   www host ([everyayahWwwUrl] —
+/// * Source (v13.5, reordered v13.7, v13.12): the per-ayah file
+///   over the www host ([everyayahWwwUrl] —
 ///   `http://www.everyayah.com/data/<folder>/SSSAAA.mp3`, Wahy's
 ///   address: that host opens from the user's Syrian network,
 ///   where the bare-HTTPS per-ayah URL does not) goes FIRST, so
-///   playback starts in seconds. The per-surah ZIP
+///   playback starts in seconds; then islamic.network, then the
+///   alternate hosts ([altAyahUrls]), then the bare-HTTPS
+///   per-ayah file ([everyayahUrl]) last. The per-surah ZIP
 ///   ([everyayahSurahZipUrl] — same host, `.../zips/NNN.zip`) is
-///   the fallback for a per-ayah failure and the explicit bulk
-///   download: it is unzipped into the same per-ayah layout the
+///   the explicit bulk download ONLY (v13.12 — the user's
+///   correction: one page plays by itself, without the whole
+///   surah): it is unzipped into the same per-ayah layout the
 ///   player already uses, so one ZIP download caches the whole
-///   surah. The bare-HTTPS per-ayah file ([everyayahUrl]) is the
-///   last resort. No new reciters.
+///   surah — but playback never requests it. No new reciters.
 /// * Resume: downloads are per-SURAH, decided from the files on
 ///   disk — a failed or interrupted job resumes from the next
 ///   missing surah, and files already on disk are never re-fetched
@@ -127,30 +129,21 @@ class AudioDownloadService extends ChangeNotifier {
   /// and works offline. Files live in the SAME layout as the
   /// surah downloads above, so a cached ayah also counts as
   /// downloaded for the downloads screen — and vice versa.
-  /// v13.5 — the surah ZIP first: one download of
-  /// `http://www.everyayah.com/data/<folder>/zips/NNN.zip` (Wahy's
-  /// exact method) caches the WHOLE surah, so the next ayah in the
-  /// same surah plays offline with no further download. That
-  /// address opens from the user's Syrian network, where the
-  /// bare-HTTPS per-ayah URL does not. The ZIP is deleted after
-  /// extraction — the extracted per-ayah files ARE the cache.
-  /// v13.7 — REORDERED: the ZIP-first order made the FIRST play of
-  /// any surah (or any single page of it) wait for the whole surah
-  /// ZIP — 58 MB for Baqarah — before the first sound ("التحميل
-  /// بطيئ جدا" on the user's phone, 2026-11-18, for ayah AND page
-  /// playback alike). Now the per-ayah file over the www host
+  /// The chain is per-ayah files ONLY (v13.12 — the user's
+  /// correction, 2026-11-18): he plays ONE page by itself, all 15
+  /// lines, complete, WITHOUT downloading the whole surah — so
+  /// there is NO whole-surah ZIP anywhere in the playback path.
+  /// The ZIP lives ONLY in the explicit bulk download the user
+  /// starts himself from «تحميل التلاوات» ([downloadSurahs] /
+  /// [_downloadSurahZip]). The chain: www per-ayah first
   /// ([everyayahWwwUrl] — same host as the ZIP, proven to open
-  /// from his network) goes FIRST: one small file (~80–160 KB),
-  /// playback starts in seconds, and the next ayah is prefetched
-  /// while the current one plays. The bare-HTTPS per-ayah URL is
-  /// the third try (v13.11 — a small file before the giant ZIP,
-  /// so a failed www file never triggers a whole-surah download
-  /// before the cheap retries); islamic.network per-ayah is the
-  /// second try for reciters with a content-verified edition
-  /// (Hani Rifai only so far — a DIFFERENT host, for when
-  /// everyayah itself is unreachable); the ZIP is the last resort
-  /// (same host, whole surah cached offline in one go) and the
-  /// explicit bulk download ([downloadSurahs]).
+  /// from his network; one small file ~80–160 KB, playback starts
+  /// in seconds); islamic.network per-ayah second for the 12
+  /// reciters with a content-verified edition (a DIFFERENT host,
+  /// for when everyayah itself is unreachable); the alternate
+  /// hosts ([altAyahUrls]) third for ALL 16 reciters (v13.12 —
+  /// two verified hosts each: mirrors / Maqra / verses.quran.com /
+  /// Al Furqan); bare-HTTPS per-ayah last.
   /// Returns the file, or null when the download fails (the player
   /// then falls back to streaming). Never throws. [onProgress] /
   /// [isCancelled] are forwarded to the streamed download (v13.3).
@@ -181,9 +174,11 @@ class AudioDownloadService extends ChangeNotifier {
     // 2. islamic.network per-ayah (v13.11) — a DIFFERENT host: the
     // same recordings as everyayah, verified by content
     // (identical transcripts + bit-identical PCM). Only when the
-    // reciter has a verified edition (null otherwise — Tunaiji has
-    // no per-ayah files there, and المنشاوي's edition is the wrong
-    // recording style, so both stay everyayah-only).
+    // reciter has a verified edition (null otherwise — Tunaiji,
+    // Tablawi and Dosari have no per-ayah files there, and
+    // المنشاوي's edition is the wrong recording style, so they
+    // have no islamic.network step — all four get the alternate
+    // hosts at step 2b below instead).
     final islamicUrl = islamicNetworkUrl(reciter, surah, ayah);
     if (islamicUrl != null &&
         await _fetchToFile(
@@ -195,15 +190,35 @@ class AudioDownloadService extends ChangeNotifier {
       return localAyahFile(reciter, surah, ayah);
     }
     if (isCancelled?.call() ?? false) return null;
-    // 3. Bare-HTTPS per-ayah (v13.11) — still one small file. It
-    // moved ahead of the ZIP: when the www file fails, the next try
-    // must be another SMALL file, not a whole-surah ZIP (58 MB for
-    // Baqarah) that stalls the page for minutes before the error —
-    // the user's "the page takes too long" complaint (2026-11-18,
-    // page 151). The bare host does not open from his Syrian
-    // network, so on his phone this step fails fast and the ZIP
-    // below is the real fallback; on networks where bare works it
-    // saves the surah download entirely.
+    // 2b. Alternate per-ayah hosts (v13.12) — ALL 16 reciters,
+    // two content-verified hosts each (see [altAyahUrls]):
+    // a DIFFERENT host family from everyayah.com /
+    // islamic.network. Same position as islamic.network: after
+    // www, before the bare file.
+    // Empty for no reciter any more — every chain has this step.
+    for (final altUrl in altAyahUrls(reciter, surah, ayah)) {
+      if (await _fetchToFile(
+        altUrl,
+        file,
+        onProgress: onProgress,
+        isCancelled: isCancelled,
+      )) {
+        return localAyahFile(reciter, surah, ayah);
+      }
+      if (isCancelled?.call() ?? false) return null;
+    }
+    if (isCancelled?.call() ?? false) return null;
+    // 3. Bare-HTTPS per-ayah (v13.11) — still one small file,
+    // and the LAST try: when the www file fails, the next tries
+    // must be other SMALL files on other hosts, never a
+    // whole-surah ZIP (58 MB for Baqarah) that stalls the page
+    // for minutes before the error — the user's "the page takes
+    // too long" complaint (2026-11-18, page 151). The bare host
+    // does not open from his Syrian network, so on his phone this
+    // step fails fast; on networks where bare works it serves the
+    // ayah. There is NO step 4 any more (v13.12 — the user's
+    // correction): the whole-surah ZIP is NOT a playback fallback
+    // at all, only the explicit bulk download ([downloadSurahs]).
     if (await _fetchToFile(
       everyayahUrl(reciter, surah, ayah),
       file,
@@ -212,44 +227,77 @@ class AudioDownloadService extends ChangeNotifier {
     )) {
       return localAyahFile(reciter, surah, ayah);
     }
-    if (isCancelled?.call() ?? false) return null;
-    // 4. Whole-surah ZIP (same host) — caches the surah offline.
-    final extracted = await _downloadSurahZip(
-      reciter,
-      surah,
-      onProgress: onProgress,
-      isCancelled: isCancelled,
-    );
-    if (extracted != null) {
-      final cached = localAyahFile(reciter, surah, ayah);
-      if (cached != null) return cached;
-      // The ZIP extracted but this ayah is not in it — one last
-      // try of the bare per-ayah file (v13.5 guarantee): the bare
-      // attempt at step 3 may have failed transiently, and the
-      // ZIP was the only thing left. If it 404s again the file
-      // simply does not exist anywhere.
-      if (isCancelled?.call() ?? false) return null;
-      if (await _fetchToFile(
-        everyayahUrl(reciter, surah, ayah),
-        file,
-        onProgress: onProgress,
-        isCancelled: isCancelled,
-      )) {
-        return localAyahFile(reciter, surah, ayah);
-      }
-    }
     return null;
+  }
+
+  /// Whole-page preload (v13.12 — the radical fix, user order
+  /// 2026-11-18, corrected 2026-11-18): makes sure EVERY ayah in
+  /// [ayahs] is cached before the page plays, and returns whether
+  /// the page is whole. Two passes over per-ayah files ONLY —
+  /// there is NO whole-surah ZIP anywhere in the playback path
+  /// (the user's correction: he plays ONE page by itself, all 15
+  /// lines, complete, WITHOUT downloading the whole surah; the
+  /// ZIP lives only in the explicit bulk download):
+  /// 1. Fast path — [cacheAyahFile] one small file at a time over
+  ///    all hosts (www → islamic.network → the 2 alternate hosts
+  ///    → bare). The missing ayahs are collected, not failed on:
+  ///    the v13.11 preload failed the WHOLE page on the FIRST
+  ///    failed ayah, so one bad file killed a page even when the
+  ///    other ayahs were already cached.
+  /// 2. Retry pass — the full per-ayah chain ONCE MORE for the
+  ///    missing ayahs only (a transient failure on the first pass
+  ///    — a dropped connection, a slow host — often succeeds on
+  ///    the second). Only ayahs STILL missing after both passes
+  ///    fail the page.
+  /// Returns false on cancel too (the caller checks its own token
+  /// and bails silently). Never throws.
+  Future<bool> preloadAyahs(
+    Reciter reciter,
+    List<(int, int)> ayahs, {
+    DownloadCancelCheck? isCancelled,
+  }) async {
+    final missing = <(int, int)>[];
+    for (final ayah in ayahs) {
+      if (isCancelled?.call() ?? false) return false;
+      final file = await cacheAyahFile(
+        reciter,
+        ayah.$1,
+        ayah.$2,
+        isCancelled: isCancelled,
+      );
+      if (isCancelled?.call() ?? false) return false;
+      if (file == null) missing.add(ayah);
+    }
+    if (missing.isEmpty) return true;
+    // Retry pass: the full per-ayah chain once more, for the
+    // missing ayahs only — never a whole-surah ZIP.
+    for (final ayah in List.of(missing)) {
+      if (isCancelled?.call() ?? false) return false;
+      final file = await cacheAyahFile(
+        reciter,
+        ayah.$1,
+        ayah.$2,
+        isCancelled: isCancelled,
+      );
+      if (isCancelled?.call() ?? false) return false;
+      if (file != null) missing.remove(ayah);
+    }
+    return missing.isEmpty;
   }
 
   /// Downloads one surah's everyayah ZIP and extracts it into the
   /// reciter folder (v13.5 — Wahy's exact method, see
-  /// [everyayahSurahZipUrl]). Returns the extracted ayah names
-  /// (SSSAAA) on success, or null when the ZIP download failed (the
-  /// caller then falls back to the per-ayah download). An
-  /// extraction that yields nothing (corrupt ZIP) still returns an
-  /// empty set — the caller fills the missing ayahs per-ayah. The
-  /// ZIP file itself is deleted after extraction: the extracted
-  /// per-ayah files ARE the cache. Never throws.
+  /// [everyayahSurahZipUrl]). Used ONLY by the explicit bulk
+  /// download the user starts himself from «تحميل التلاوات»
+  /// ([downloadSurahs] / [_runJob]) — never by playback (v13.12:
+  /// the page plays one page by itself, without the whole surah).
+  /// Returns the extracted ayah names (SSSAAA) on success, or
+  /// null when the ZIP download failed (the caller then falls back
+  /// to the per-ayah download). An extraction that yields nothing
+  /// (corrupt ZIP) still returns an empty set — the caller fills
+  /// the missing ayahs per-ayah. The ZIP file itself is deleted
+  /// after extraction: the extracted per-ayah files ARE the cache.
+  /// Never throws.
   Future<Set<String>?> _downloadSurahZip(
     Reciter reciter,
     int surah, {

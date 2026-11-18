@@ -325,15 +325,23 @@ class AudioPlayerController extends ChangeNotifier {
     queueIndex = 0;
     wordIndex = null;
     _scopePlays = 1;
-    // v13.11 — whole-page preload (the user's order, 2026-11-18):
-    // a page plays ONLY after ALL its ayahs are downloaded; no
-    // sound until the page is fully cached, no ayah-by-ayah loading
+    // v13.12 — whole-page preload, restructured (the user's
+    // order, 2026-11-18, corrected the same day): the page plays
+    // ONLY after ALL its ayahs are downloaded; no sound until
+    // the page is fully cached, no ayah-by-ayah loading
     // mid-playback. Silent: no progress UI (the user chose no
     // download display at all); the play button spinner is the only
-    // sign. A failed ayah stops the whole page with the error —
-    // never a half-played page. Cached ayahs return at once, so a
-    // replay / retry costs nothing. stop() aborts the preload via
-    // the token (see stop()).
+    // sign. The v13.11 preload failed the WHOLE page on the FIRST
+    // failed ayah, so one bad file killed a page even when the
+    // other ayahs were already cached — now [AudioDownloadService.
+    // preloadAyahs] collects the missing ayahs first and runs
+    // the full per-ayah chain ONCE MORE for them, and only ayahs
+    // STILL missing after both passes fail the page. There is NO
+    // whole-surah ZIP in the playback path at all (the user's
+    // correction: one page plays by itself, without the whole
+    // surah). Cached ayahs return at once, so a replay / retry
+    // costs nothing. stop() aborts the preload via the token
+    // (see stop()).
     final token = ++_playToken;
     lastError = null;
     isLoading = true;
@@ -342,20 +350,11 @@ class AudioPlayerController extends ChangeNotifier {
     final dl = downloads;
     var preloaded = true;
     if (dl != null) {
-      for (final ayah in queue) {
-        if (token != _playToken || _disposed) return;
-        final file = await dl.cacheAyahFile(
-          reciter,
-          ayah.$1,
-          ayah.$2,
-          isCancelled: () => token != _playToken,
-        );
-        if (token != _playToken || _disposed) return;
-        if (file == null) {
-          preloaded = false;
-          break;
-        }
-      }
+      preloaded = await dl.preloadAyahs(
+        reciter,
+        queue,
+        isCancelled: () => token != _playToken,
+      );
     }
     if (token != _playToken || _disposed) return;
     if (!preloaded) {
@@ -648,7 +647,6 @@ class AudioPlayerController extends ChangeNotifier {
         // A failed download falls back to streaming below. The
         // download reports honest progress and aborts when this
         // attempt is superseded (v13.3, FIX A).
-        final url = everyayahUrl(reciter, ayah.$1, ayah.$2);
         final local = await downloads?.cacheAyahFile(
           reciter,
           ayah.$1,
@@ -664,12 +662,35 @@ class AudioPlayerController extends ChangeNotifier {
           await _player
               .setFilePath(local.path)
               .timeout(const Duration(seconds: 20));
+          if (token != _playToken || _disposed) return;
+          await _player.setSpeed(speed).timeout(const Duration(seconds: 5));
+          await _player.play().timeout(const Duration(seconds: 10));
         } else {
-          await _player.setUrl(url).timeout(const Duration(seconds: 20));
+          // Streaming fallback (v13.12 — the user's correction,
+          // 2026-11-18): Wahy plays ONE ayah directly, without
+          // the whole surah — and the word path already streams
+          // from every host in order. The ayah path streamed
+          // ONLY the bare everyayah URL (blocked from Syria).
+          // Now it tries every host in order
+          // ([ayahStreamUrlsInOrder]): www first, then the
+          // alternate hosts, then islamic.network, bare last —
+          // via [_loadAndPlay], which returns false on timeout
+          // or error, like the word path. All hosts failed:
+          // report the error, never silence.
+          var streamed = false;
+          for (final url
+              in ayahStreamUrlsInOrder(reciter, ayah.$1, ayah.$2)) {
+            if (token != _playToken || _disposed) return;
+            if (await _loadAndPlay(url, Duration.zero, token)) {
+              streamed = true;
+              break;
+            }
+          }
+          if (!streamed) {
+            if (token == _playToken) _reportError(_playCurrent);
+            return;
+          }
         }
-        if (token != _playToken || _disposed) return;
-        await _player.setSpeed(speed).timeout(const Duration(seconds: 5));
-        await _player.play().timeout(const Duration(seconds: 10));
         _finishToken = token;
         // Prefetch the next ayah while this one plays, so page /
         // surah playback has no gap between ayahs on a weak
