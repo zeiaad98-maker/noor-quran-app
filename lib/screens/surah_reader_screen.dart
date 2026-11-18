@@ -18,7 +18,6 @@ import '../data/tafsir_downloads.dart';
 import '../main.dart';
 import '../widgets/audio_player_sheet.dart';
 import '../widgets/ayah_action_sheet.dart';
-import '../widgets/mini_audio_bar.dart';
 import '../widgets/noor_qcf_page.dart';
 import '../widgets/quran_search_sheet.dart';
 import '../widgets/surah_name_image.dart';
@@ -62,11 +61,6 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
   // True while a page jump was caused by the player following the
   // playing ayah; such jumps must NOT stop the playback.
   bool _playerDrivenPageChange = false;
-  // True while the compact mini-player bar is docked at the bottom
-  // of the reader (word playback from the word popup). It is NOT a
-  // modal sheet: the reader's own audio button still opens the full
-  // AudioPlayerSheet.
-  bool _showMiniBar = false;
   Set<String> _notedAyahIds = {};
   // v13.3 (FIX B): bookmarked (فاصل) and coloured (تلوين) ayahs,
   // loaded with the noted ids to tint the page.
@@ -269,7 +263,6 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
       _playerDrivenPageChange = false;
     } else {
       unawaited(_audioController.stop());
-      _showMiniBar = false;
     }
     _saveLastRead();
     SharedPreferences.getInstance().then((prefs) {
@@ -476,22 +469,29 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
   /// Opens the audio player sheet, preset to [scope], and starts
   /// playing immediately. The reader play button opens it on the
   /// current page; the ayah sheet opens it on that ayah; a tapped
-  /// word opens it on that word.
+  /// word opens it on that word. [startPlayback] false opens the
+  /// sheet WITHOUT (re)starting anything — for the toolbar buttons
+  /// while audio is already playing (v13.7: the mini bar is gone,
+  /// so the toolbar button is the pause control and must not
+  /// restart the page when tapped mid-playback).
   void _openPlayerSheet({
     required PlayerScope scope,
     int? surah,
     int? verse,
     int? wordIndex,
+    bool startPlayback = true,
   }) {
-    switch (scope) {
-      case PlayerScope.word:
-        unawaited(_audioController.playWord(surah!, verse!, wordIndex!));
-      case PlayerScope.ayah:
-        unawaited(_audioController.playAyah(surah!, verse!));
-      case PlayerScope.page:
-        unawaited(_audioController.playPages(_currentPage, _currentPage));
-      case PlayerScope.surah:
-        unawaited(_audioController.playSurah(surah!));
+    if (startPlayback) {
+      switch (scope) {
+        case PlayerScope.word:
+          unawaited(_audioController.playWord(surah!, verse!, wordIndex!));
+        case PlayerScope.ayah:
+          unawaited(_audioController.playAyah(surah!, verse!));
+        case PlayerScope.page:
+          unawaited(_audioController.playPages(_currentPage, _currentPage));
+        case PlayerScope.surah:
+          unawaited(_audioController.playSurah(surah!));
+      }
     }
     showModalBottomSheet(
       context: context,
@@ -559,15 +559,15 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
   /// tafsir card moved to the word card's تفاسير button).
   ///
   /// v13.2 (best-apps rule 1): tapping a word plays JUST the word
-  /// immediately — the wbw file, never the ayah — and shows the
-  /// compact mini-player bar docked at the bottom of the reader.
+  /// immediately — the wbw file, never the ayah. v13.7: no bar
+  /// appears — the word card itself holds the play/repeat
+  /// controls, and the reader's top audio button pauses.
   /// v13.6: the auto-play honours the word settings toggle
   /// ([AudioPlayerController.wordAutoPlay]) — when off, the tap
   /// opens the card only and the green ▶ plays the word.
   void _openWordCard(int surah, int verse, int wordIndex) {
     if (_audioController.wordAutoPlay) {
       unawaited(_audioController.playWord(surah, verse, wordIndex + 1));
-      if (mounted) setState(() => _showMiniBar = true);
     }
     showWordCard(
       context: context,
@@ -577,19 +577,15 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
       audioController: _audioController,
       onPlayWord: (word) {
         unawaited(_audioController.playWord(surah, verse, word + 1));
-        if (mounted) setState(() => _showMiniBar = true);
       },
       onRepeatWord: (word) {
         unawaited(_audioController.repeatWord(surah, verse, word + 1));
-        if (mounted) setState(() => _showMiniBar = true);
       },
       onPlayAyah: () {
         unawaited(_audioController.playAyah(surah, verse));
-        if (mounted) setState(() => _showMiniBar = true);
       },
       onContinueFromAyah: () {
         unawaited(_audioController.playFromAyah(surah, verse));
-        if (mounted) setState(() => _showMiniBar = true);
       },
       onGoToLastReading: _goToLastReading,
       // ملاحظة opens the ayah sheet (note editor lives there);
@@ -618,11 +614,11 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
 
   /// Long-press a word plays its whole AYAH (v13.2, UX D /
   /// best-apps rule 2): the second, distinct gesture for ayah audio
-  /// — tap is the word, long-press is the ayah (rule 6). Shows the
-  /// mini bar; the full sheet is one tap away on the bar.
+  /// — tap is the word, long-press is the ayah (rule 6). No bar
+  /// appears (v13.7): pause/stop from the reader's top audio
+  /// button, the bottom إيقاف الصوت button, or the player sheet.
   void _onWordLongPress(int surah, int verse, int wordIndex) {
     unawaited(_audioController.playAyah(surah, verse));
-    if (mounted) setState(() => _showMiniBar = true);
   }
 
   /// Tafsir card (v12): opened from the word card's التفسير button
@@ -931,9 +927,21 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                                   : Icons.play_arrow,
                             ),
                             color: goldColor,
-                            onPressed: () => _openPlayerSheet(
-                              scope: PlayerScope.page,
-                            ),
+                            // v13.7: the mini bar is gone, so this
+                            // button IS the pause control — while
+                            // playing it pauses at once (no sheet,
+                            // no restart); while idle it opens the
+                            // player sheet and starts the page.
+                            onPressed: () {
+                              if (_audioController.isPlaying) {
+                                unawaited(
+                                    _audioController.togglePlayPause());
+                              } else {
+                                _openPlayerSheet(
+                                  scope: PlayerScope.page,
+                                );
+                              }
+                            },
                           ),
                           IconButton(
                             icon: const Icon(Icons.settings),
@@ -971,8 +979,12 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           TextButton.icon(
+                            // v13.7: while audio plays this opens the
+                            // sheet without restarting the page.
                             onPressed: () => _openPlayerSheet(
                               scope: PlayerScope.page,
+                              startPlayback:
+                                  !_audioController.isPlaying,
                             ),
                             icon: const Icon(Icons.person, size: 18),
                             label: Text(
@@ -1002,25 +1014,6 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                   ),
                 ),
               ),
-              // Compact mini-player bar (word playback from the word
-              // popup): docked at the bottom of the reader, overlaying
-              // the page — never a modal sheet. X stops the audio
-              // and hides the bar; a manual page change hides it too.
-              if (_showMiniBar)
-                Positioned(
-                  bottom: 0,
-                  left: 0,
-                  right: 0,
-                  child: MiniAudioBar(
-                    controller: _audioController,
-                    onClose: () async {
-                      await _audioController.stop();
-                      if (mounted) {
-                        setState(() => _showMiniBar = false);
-                      }
-                    },
-                  ),
-                ),
             ],
           ),
         ),
