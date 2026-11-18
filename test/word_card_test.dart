@@ -11,7 +11,6 @@ import 'package:noor_quran/data/qcf_word_map.dart';
 import 'package:noor_quran/data/tafsir_downloads.dart';
 import 'package:noor_quran/data/word_meanings.dart';
 import 'package:noor_quran/widgets/audio_player_sheet.dart';
-import 'package:noor_quran/widgets/ayah_action_sheet.dart';
 import 'package:noor_quran/widgets/word_card.dart';
 
 /// v12 word card + tafsir card + chip fix, pinned at a 411dp-wide
@@ -19,7 +18,9 @@ import 'package:noor_quran/widgets/word_card.dart';
 ///
 /// The v10/v11 tabbed popup is GONE: tap a word → one small card
 /// (word + meaning, toolbar swaps المعنى/صرف/إعراب INSIDE the card);
-/// tap the verse-end number ۝ → the tafsir card. No tabs anywhere.
+/// tap the verse-end number ۝ → the word card on the ayah's first
+/// word (v13.8 one-card rule — the old ayah sheet is cancelled).
+/// No tabs anywhere.
 ///
 /// Real audio playback is NOT tested here: just_audio needs a real
 /// device/platform channel. Everything around it is pinned.
@@ -160,6 +161,7 @@ void main() {
                   surah: surah,
                   verse: verse,
                   wordIndex: wordIndex,
+                  pageNumber: 3,
                   audioController: AudioPlayerController(),
                   onPlayWord: playedWords.add,
                   onRepeatWord: repeatedWords.add,
@@ -167,7 +169,7 @@ void main() {
                   onContinueFromAyah: () =>
                       continuedAyahs.add((surah, verse)),
                   onGoToLastReading: () => lastReadingTaps++,
-                  onOpenNotes: () => notesTaps++,
+                  onOpenNotesScreen: () => notesTaps++,
                   onOpenTafsir: () => tafsirTaps++,
                   onOpenReciterPicker: () => reciterPickerTaps++,
                   onOpenPlaybackSettings: () => playbackSettingsTaps++,
@@ -335,7 +337,14 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(WordCard), findsOneWidget);
 
-      // Bookmark toggles (the ayah was not bookmarked).
+      // Bookmark toggles (the ayah was not bookmarked). The
+      // last-reading bar sits in the scrollable middle: with the
+      // v13.8 info line the card is taller, so the button can sit
+      // just below the fold until scrolled (same as in the real app).
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('bookmarkButton')),
+        100,
+      );
       await tester.tap(find.byKey(const ValueKey('bookmarkButton')));
       await tester.pump();
       expect(
@@ -356,9 +365,11 @@ void main() {
         // The ملاحظة/تفاسير row sits at the bottom of the scrollable
         // middle: with a long meaning it is just below the fold until
         // scrolled (same as in the real app) — scroll it into view.
-        await tester.scrollUntilVisible(
+        // ensureVisible (ancestor walk), not scrollUntilVisible:
+        // once the note editor is open its TextField adds a second
+        // Scrollable and scrollUntilVisible sees two.
+        await tester.ensureVisible(
           find.byKey(ValueKey(key)),
-          100,
         );
         await tester.tap(find.byKey(ValueKey(key)));
         await tester.pumpAndSettle();
@@ -374,8 +385,23 @@ void main() {
       await tapCloser('lastReadingButton');
       expect(lastReadingTaps, 1);
 
-      await tapCloser('notesButton');
-      expect(notesTaps, 1);
+      // ملاحظة toggles the INLINE editor (v13.8) — the card stays
+      // open and the notes-list callback does NOT fire yet (it fires
+      // only from the editor's ملاحظاتي link). The previous closer
+      // (آخر قراءة) popped the card, so reopen it first.
+      if (find.byType(WordCard).evaluate().isEmpty) {
+        await openCard(tester);
+      }
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('notesButton')),
+        100,
+      );
+      await tester.tap(find.byKey(const ValueKey('notesButton')));
+      await tester.pump();
+      expect(find.byType(WordCard), findsOneWidget);
+      expect(find.byKey(const ValueKey('noteEditor')), findsOneWidget);
+      expect(find.byKey(const ValueKey('noteTextField')), findsOneWidget);
+      expect(notesTaps, 0);
 
       await tapCloser('tafsirButton');
       expect(tafsirTaps, 1);
@@ -497,7 +523,10 @@ void main() {
     });
   });
 
-  group('ayah-sheet chips use true word indices (v12 fix)', () {
+  // v13.8: the ayah-sheet widget test is gone with the sheet — the
+  // pure QCF-map checks stay (the word card's header taps cover the
+  // same split in v138).
+  group('QCF word map splits merged morphology entries (v12 fix)', () {
     test('2:181: map has 14 true words, morphology only 13 entries',
         () async {
       expect(buildQcfWordMap(2, 181).wordCount, 14);
@@ -512,42 +541,6 @@ void main() {
     test('37:130: map has 4 true words, morphology 3 entries', () async {
       expect(buildQcfWordMap(37, 130).wordCount, 4);
       expect((await QuranWordData.wordsForAyah(37, 130)).length, 3);
-    });
-
-    testWidgets('2:181 chips: 14 separate chips, بَعۡدَ and مَا apart',
-        (tester) async {
-      set411(tester);
-      SharedPreferences.setMockInitialValues({});
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: SingleChildScrollView(
-              child: AyahActionSheet(
-                surahNumber: 2,
-                verseNumber: 181,
-                pageNumber: 27,
-                onPlayAyah: () {},
-                onPlayWord: (_) {},
-                onOpenNotesScreen: () {},
-                onNoteChanged: () {},
-              ),
-            ),
-          ),
-        ),
-      );
-      await warmUntilLoaded(tester);
-
-      // The sheet has other OutlinedButtons (note editor) — count
-      // only the word chips, which live in the Wrap.
-      final chips = find.descendant(
-        of: find.byType(Wrap),
-        matching: find.byType(OutlinedButton),
-      );
-      expect(chips, findsNWidgets(14));
-      expect(find.text('بَعۡدَ'), findsOneWidget);
-      expect(find.text('مَا'), findsOneWidget);
-      expect(find.text('بَعۡدَ مَا'), findsNothing);
-      expect(tester.takeException(), isNull);
     });
   });
 

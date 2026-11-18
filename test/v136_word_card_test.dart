@@ -162,16 +162,17 @@ void main() {
 
     test('wordAutoPlay persists and restores', () async {
       final controller = await makeController();
-      expect(controller.wordAutoPlay, isTrue);
-      controller.setWordAutoPlay(false);
+      // v13.8: OFF by default — a tap opens the meaning only.
+      expect(controller.wordAutoPlay, isFalse);
+      controller.setWordAutoPlay(true);
       await Future<void>.delayed(const Duration(milliseconds: 100));
       final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getBool('word_autoplay'), isFalse);
+      expect(prefs.getBool('word_autoplay'), isTrue);
 
       final restored = AudioPlayerController();
       addTearDown(restored.dispose);
       await restored.restorePlaybackSettings();
-      expect(restored.wordAutoPlay, isFalse);
+      expect(restored.wordAutoPlay, isTrue);
     });
 
     test('gloss priority still holds after the card rewrite (4:4)',

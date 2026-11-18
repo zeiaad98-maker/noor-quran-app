@@ -13,8 +13,8 @@ import 'package:noor_quran/data/audio_downloads.dart';
 import 'package:noor_quran/data/quran_audio.dart';
 import 'package:noor_quran/main.dart';
 import 'package:noor_quran/screens/surah_reader_screen.dart';
-import 'package:noor_quran/widgets/ayah_action_sheet.dart';
 import 'package:noor_quran/widgets/audio_player_sheet.dart';
+import 'package:noor_quran/widgets/word_card.dart';
 
 import 'fake_just_audio.dart';
 import 'zip_fixture.dart';
@@ -218,7 +218,9 @@ void main() {
       await pumpFrames(tester, 8);
       drainLayoutOverflows(tester);
 
-      // Tap 2:255's number glyph → the ayah sheet opens.
+      // Tap 2:255's number glyph → the word card opens (v13.8:
+      // the old ayah sheet is gone; the number tap opens the card
+      // on the ayah's first word).
       final verseText = getVerseQCF(2, 255, verseEndSymbol: false);
       RichText? mushafParagraph;
       for (final rt in tester.widgetList<RichText>(find.byType(RichText))) {
@@ -241,14 +243,32 @@ void main() {
       expect(boxes, isNotEmpty);
       await tester.tapAt(rp.localToGlobal(boxes.first.toRect().center));
       await pumpFrames(tester, 6);
-      expect(find.byType(AyahActionSheet), findsOneWidget);
+      expect(find.byType(WordCard), findsOneWidget);
 
-      // Play the ayah from the sheet: the full player sheet opens.
-      // (The button sits below the fold in the test viewport —
-      // scroll it into view first.)
-      await tester.ensureVisible(find.text('تشغيل الآية'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('تشغيل الآية'));
+      // Play the ayah from the card's bottom bar: the card pops and
+      // the ayah plays WITHOUT opening the player sheet (v13.8: the
+      // card's الآية button plays directly). No mini bar appears.
+      await tester.tap(find.byKey(const ValueKey('playAyahButton')));
+      await pumpFrames(tester, 8);
+      expect(find.byType(WordCard), findsNothing);
+      expect(find.byTooltip('إغلاق وإيقاف الصوت'), findsNothing);
+
+      // Open the full player sheet from the reader's bottom bar:
+      // the eye button shows the control bars, then the reciter
+      // name opens the sheet without restarting the ayah. (The
+      // reader's reciter is خليفة الطنيجي — the app default — not
+      // الحصري, which a fresh controller alone defaults to.)
+      //
+      // The test font is ~40% wider than the phone's Amiri, so at
+      // 411dp the reader's control rows overflow and their buttons
+      // land off-screen (hit-test misses). Widen the viewport for
+      // these steps only — the behaviour under test (audio + mini
+      // bar) does not depend on the width.
+      tester.view.physicalSize = const Size(800 * 2.63, 913 * 2.63);
+      await tester.pump();
+      await tester.tap(find.byTooltip('إظهار / إخفاء أشرطة التحكم'));
+      await pumpFrames(tester, 4);
+      await tester.tap(find.text('خليفة الطنيجي'));
       await pumpFrames(tester, 8);
       expect(find.byType(AudioPlayerSheet), findsOneWidget);
       // The sheet's own close button is the ONLY 'إغلاق وإيقاف
