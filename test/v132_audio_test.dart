@@ -100,7 +100,8 @@ void main() {
       tempDir = null;
     });
 
-    test('new CDN fails → legacy host is tried, file cached', () async {
+    test('SurahPedia is tried first (v13.6): word caches on the first attempt',
+        () async {
       final requested = <String>[];
       final service = await makeService(MockClient((request) async {
         requested.add(request.url.toString());
@@ -115,16 +116,15 @@ void main() {
       expect(file, isNotNull);
       expect(await file!.readAsBytes(), [9, 8, 7]);
       expect(requested, [
-        'https://audio.qurancdn.com/wbw/002_033_006.mp3',
-        'https://verses.quran.com/wbw/002_033_006.mp3',
+        'https://resources.surahpedia.com/Word_by-Word/2/002033006.mp3',
       ]);
       // Second call replays from disk: no further request.
       final second = await service.cacheWbwFile(2, 33, 6);
       expect(second?.path, file.path);
-      expect(requested.length, 2, reason: 'no second download');
+      expect(requested.length, 1, reason: 'no second download');
     });
 
-    test('both hosts fail → null, no file left behind', () async {
+    test('all three hosts fail → null, no file left behind', () async {
       final service = await makeService(MockClient((request) async {
         return http.Response.bytes([], 404);
       }));
@@ -169,7 +169,8 @@ void main() {
 
       expect(fake.loadCount, 1, reason: 'one play attempted');
       expect(fake.loadUris.single,
-          'https://audio.qurancdn.com/wbw/002_033_005.mp3');
+          // v13.6: SurahPedia is tried first.
+          'https://resources.surahpedia.com/Word_by-Word/2/002033005.mp3');
       expect(controller.wordUsesWbw, isTrue);
       expect(controller.lastError, isNull);
     });
@@ -183,14 +184,17 @@ void main() {
       await controller.replayCurrent();
 
       expect(fake.loadUris.single,
-          'https://audio.qurancdn.com/wbw/002_033_001.mp3');
+          // v13.6: SurahPedia is tried first.
+          'https://resources.surahpedia.com/Word_by-Word/2/002033001.mp3');
       expect(controller.wordUsesWbw, isTrue);
       expect(controller.lastError, isNull);
     });
 
-    test('new CDN fails → legacy host plays, still wbw', () async {
+    // v13.6: SurahPedia is tried FIRST — when it is down, the new
+    // CDN is next and the word still plays from its wbw file.
+    test('SurahPedia down → new CDN plays, still wbw', () async {
       fake.autoFinish = false;
-      fake.failLoadSubstrings.add('audio.qurancdn.com');
+      fake.failLoadSubstrings.add('resources.surahpedia.com');
       controller.queue = [(2, 33)];
       controller.queueIndex = 0;
       controller.scope = PlayerScope.word;
@@ -198,8 +202,8 @@ void main() {
       await controller.replayCurrent();
 
       expect(fake.loadUris, [
+        'https://resources.surahpedia.com/Word_by-Word/2/002033001.mp3',
         'https://audio.qurancdn.com/wbw/002_033_001.mp3',
-        'https://verses.quran.com/wbw/002_033_001.mp3',
       ]);
       expect(controller.wordUsesWbw, isTrue);
       expect(controller.lastError, isNull);
@@ -226,9 +230,10 @@ void main() {
       await controller.replayCurrent();
 
       expect(fake.loadUris, [
+        // v13.6 order: SurahPedia first, then the Quran.com hosts.
+        'https://resources.surahpedia.com/Word_by-Word/2/002033001.mp3',
         'https://audio.qurancdn.com/wbw/002_033_001.mp3',
         'https://verses.quran.com/wbw/002_033_001.mp3',
-        'https://resources.surahpedia.com/Word_by-Word/2/002033001.mp3',
       ], reason: 'only the three wbw hosts are attempted');
       expect(
           fake.loadUris.every((u) =>
@@ -270,8 +275,9 @@ void main() {
       await waitForLoads(3);
       expect(controller.wordIndex, 5, reason: 'still the same word');
       expect(
-          fake.loadUris.every(
-              (u) => u == 'https://audio.qurancdn.com/wbw/002_033_005.mp3'),
+          fake.loadUris.every((u) =>
+              u ==
+              'https://resources.surahpedia.com/Word_by-Word/2/002033005.mp3'),
           isTrue,
           reason: 'every replay is the same wbw file');
       await settle();

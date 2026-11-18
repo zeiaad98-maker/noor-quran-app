@@ -8,10 +8,13 @@ void main() {
   test('word data loads and matches known words', () async {
     await QuranWordData.ensureLoaded();
 
-    // 2:7 — خَتَمَ has a Siraj meaning; غِشَاوَةٌ too.
+    // 2:7 — خَتَمَ: مخلوف (v13.6) glosses the phrase «خَتَمَ اللَّهُ»
+    // as «طبع الله»; غِشَاوَةٌ too.
     final m1 = await QuranWordData.meaningForWord(2, 7, 'خَتَمَ');
     expect(m1, isNotNull);
-    expect(m1, contains('طَبَعَ'));
+    expect(m1, 'طبع الله');
+    expect(await QuranWordData.glossSourceForWord(2, 7, 'خَتَمَ'),
+        'makhloof');
 
     final m2 = await QuranWordData.meaningForWord(2, 7, 'غِشَاوَةٌ');
     expect(m2, isNotNull);

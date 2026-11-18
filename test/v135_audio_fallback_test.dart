@@ -12,10 +12,10 @@ import 'package:noor_quran/data/quran_audio.dart';
 import 'fake_just_audio.dart';
 import 'zip_fixture.dart';
 
-/// v13.5 audio fallbacks.
+/// v13.5 audio fallbacks, order updated in v13.6.
 ///
-/// Word audio: the Quran.com wbw hosts first, then SurahPedia
-/// (resources.surahpedia.com — Wahy's host, byte-identical files).
+/// Word audio: SurahPedia FIRST (resources.surahpedia.com — Wahy's
+/// host, byte-identical files), then the Quran.com wbw hosts.
 /// Ayah audio: one per-surah ZIP from `http://www.everyayah.com`
 /// (Wahy's exact method — the address that opens from the user's
 /// Syrian network), unzipped into the per-ayah cache; the bare-HTTPS
@@ -63,8 +63,8 @@ void main() {
           'https://resources.surahpedia.com/Word_by-Word/1/001002004.mp3');
     });
 
-    test('blocked Quran.com hosts: word still caches via SurahPedia',
-        () async {
+    test('SurahPedia first (v13.6): word caches on the first attempt, '
+        'no Quran.com host is hit', () async {
       final requested = <String>[];
       service = await buildService(MockClient((request) async {
         requested.add(request.url.toString());
@@ -78,14 +78,12 @@ void main() {
       expect(file, isNotNull);
       expect(await file!.readAsBytes(), [5, 5, 5]);
       expect(requested, [
-        'https://audio.qurancdn.com/wbw/003_007_015.mp3',
-        'https://verses.quran.com/wbw/003_007_015.mp3',
         'https://resources.surahpedia.com/Word_by-Word/3/003007015.mp3',
       ]);
       // Second call replays from disk: no further request.
       final second = await service.cacheWbwFile(3, 7, 15);
       expect(second?.path, file.path);
-      expect(requested.length, 3, reason: 'no second download');
+      expect(requested.length, 1, reason: 'no second download');
     });
 
     test('all three wbw hosts fail → null, no file left behind',
@@ -267,7 +265,7 @@ void main() {
       fake.resetCounts();
     });
 
-    test('blocked Quran.com hosts: word still plays via SurahPedia',
+    test('SurahPedia first (v13.6): word plays on the first attempt',
         () async {
       final controller = AudioPlayerController();
       addTearDown(controller.dispose);
@@ -279,10 +277,28 @@ void main() {
       controller.wordIndex = 15; // الَّذِينَ — file 015 (v13.4)
       await controller.replayCurrent();
 
+      // SurahPedia answers first, so the Quran.com hosts are never hit.
       expect(fake.loadUris, [
-        'https://audio.qurancdn.com/wbw/003_007_015.mp3',
-        'https://verses.quran.com/wbw/003_007_015.mp3',
         'https://resources.surahpedia.com/Word_by-Word/3/003007015.mp3',
+      ]);
+      expect(controller.wordUsesWbw, isTrue);
+      expect(controller.lastError, isNull);
+    });
+
+    test('SurahPedia down: word still plays via qurancdn (v13.6 order)',
+        () async {
+      final controller = AudioPlayerController();
+      addTearDown(controller.dispose);
+      fake.failLoadSubstrings.add('resources.surahpedia.com');
+      controller.queue = [(3, 7)];
+      controller.queueIndex = 0;
+      controller.scope = PlayerScope.word;
+      controller.wordIndex = 15; // الَّذِينَ — file 015 (v13.4)
+      await controller.replayCurrent();
+
+      expect(fake.loadUris, [
+        'https://resources.surahpedia.com/Word_by-Word/3/003007015.mp3',
+        'https://audio.qurancdn.com/wbw/003_007_015.mp3',
       ]);
       expect(controller.wordUsesWbw, isTrue);
       expect(controller.lastError, isNull);

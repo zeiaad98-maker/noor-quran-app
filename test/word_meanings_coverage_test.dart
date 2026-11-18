@@ -21,6 +21,13 @@ import 'package:noor_quran/data/word_meanings.dart';
 ///   (-10: a few words whose غريب entries spell them WITHOUT the
 ///   alef the dagger represents, e.g. ذَٰلِكَ vs ذَلِكَ — they keep
 ///   their morphology gloss, so withGloss stays 100%).
+///
+/// v13.6 — مخلوف «كلمات القرآن» short glosses (+ 1 additions gloss)
+///   as the FIRST meaning source:
+///   withMakhloof 10,308 (strict matching: exact + token-in-phrase
+///   only, no containment), withAddition 1, withMeaning 49,054 ->
+///   50,409 (65.1%). withGharib 9,851 and withLexicon 46,199 are
+///   unchanged (independent per-source counts).
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -29,17 +36,25 @@ void main() {
     final stats = await QuranWordData.coverageStats();
     // Printed so the run log records the measured numbers.
     // ignore: avoid_print
-    print('COVERAGE total=${stats.total} withGharib=${stats.withGharib} '
+    print('COVERAGE total=${stats.total} '
+        'withMakhloof=${stats.withMakhloof} '
+        'withAddition=${stats.withAddition} '
+        'withGharib=${stats.withGharib} '
         'withLexicon=${stats.withLexicon} withMeaning=${stats.withMeaning} '
         'withGloss=${stats.withGloss}');
     expect(stats.total, 77429);
+    // مخلوف short glosses (v13.6, strict matching) cover 10,308 words
+    // as first source; the additions file covers 1 word (4:4 فَكُلُوهُ).
+    expect(stats.withMakhloof, 10308);
+    expect(stats.withAddition, 1);
     // غريب القرآن alone covered 9,079 (11.7%) before the lexicon,
     // 9,851 after the v12 dagger-alef fix (see the header comment).
     expect(stats.withGharib, 9851);
     // مفردات الراغب (root lexicon) covers 46,199 words on its own.
     expect(stats.withLexicon, 46199);
-    // Combined meaning coverage: غريب ∪ lexicon = 49,054 (63.4%).
-    expect(stats.withMeaning, 49054);
+    // Combined meaning coverage: additions ∪ مخلوف ∪ غريب ∪ lexicon =
+    // 50,409 (65.1%).
+    expect(stats.withMeaning, 50409);
     // A gloss exists for EVERY word (meaning or morphology description).
     expect(stats.withGloss, stats.total);
   });
@@ -57,18 +72,18 @@ void main() {
   test('spot check: السَّمَاوَاتِ (2:29) comes from the root lexicon',
       () async {
     final words = await QuranWordData.wordsForAyah(2, 29);
-    String? found;
-    for (final w in words) {
-      final lex = await QuranWordData.lexiconForWord(2, 29, w);
-      if (lex != null && lex.startsWith('سَمَاءُ كلّ شيء: أعلاه')) {
-        found = w;
-        break;
-      }
-    }
-    expect(found, isNotNull,
-        reason: 'no word in 2:29 matched the سما lexicon entry');
+    // The PLURAL سَمَاوَاتِ (not the singular السَّمَاءِ in the مخلوف
+    // phrase «اسْتَوَى إِلَى السَّمَاءِ», which مخلوف now glosses):
+    // مخلوف has no gloss for the plural, so it still falls through
+    // to the Raghib root lexicon.
+    final found = words.firstWhere(
+      (w) => QuranWordData.normalizeArabic(w).contains('سماوات'),
+      orElse: () => '',
+    );
+    expect(found, isNotEmpty,
+        reason: 'no plural سَمَاوَاتِ word in 2:29 (words: $words)');
     expect(
-        await QuranWordData.glossSourceForWord(2, 29, found!), 'lexicon');
+        await QuranWordData.glossSourceForWord(2, 29, found), 'lexicon');
     final gloss = await QuranWordData.wordGloss(2, 29, found);
     expect(gloss, startsWith('سَمَاءُ كلّ شيء: أعلاه'));
   });
@@ -93,7 +108,8 @@ void main() {
       // ignore: avoid_print
       print('GLOSS $surah:$verse [$word] source=$source gloss=$gloss');
       expect(gloss.trim(), isNotEmpty, reason: '$surah:$verse $word');
-      expect(source, isIn(['gharib', 'lexicon', 'morph']),
+      expect(source,
+          isIn(['addition', 'makhloof', 'gharib', 'lexicon', 'morph']),
           reason: '$surah:$verse $word');
     }
   });
