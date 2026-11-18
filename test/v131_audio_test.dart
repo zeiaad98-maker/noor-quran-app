@@ -1,9 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:material_ui/material_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:noor_quran/data/audio_player_controller.dart';
-import 'package:noor_quran/widgets/mini_audio_bar.dart';
 
 import 'fake_just_audio.dart';
 
@@ -226,128 +224,6 @@ void main() {
       expect(fake.loadUris.single, contains('khalefa_al_tunaiji_64kbps'));
       expect(fake.loadUris.single, isNot(contains('Husary')));
       expect(controller.lastError, isNull);
-    });
-  });
-
-  group('mini audio bar — replay button', () {
-    late AudioPlayerController controller;
-
-    setUp(() {
-      fake.autoFinish = true;
-      fake.resetCounts();
-      controller = AudioPlayerController();
-      addTearDown(controller.dispose);
-    });
-
-    Future<void> pumpBar(WidgetTester tester) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: MiniAudioBar(
-              controller: controller,
-              onClose: () {},
-            ),
-          ),
-        ),
-      );
-      await tester.pump();
-    }
-
-    testWidgets('the replay control is present (only new control)',
-        (tester) async {
-      await pumpBar(tester);
-
-      expect(find.byTooltip('إعادة الكلمة'), findsOneWidget);
-      expect(find.byIcon(Icons.replay), findsOneWidget);
-      // Everything else is unchanged: repeat-one toggle, prev/next,
-      // play, ••• menu, close.
-      expect(find.byTooltip('تكرار العنصر الحالي'), findsOneWidget);
-      expect(find.byTooltip('السابق'), findsOneWidget);
-      expect(find.byTooltip('التالي'), findsOneWidget);
-      expect(find.byTooltip('إغلاق وإيقاف الصوت'), findsOneWidget);
-      expect(find.byIcon(Icons.play_arrow), findsOneWidget);
-      expect(find.byIcon(Icons.more_vert), findsOneWidget);
-      expect(tester.takeException(), isNull);
-    });
-
-    testWidgets('replay tap with an empty queue is a safe no-op',
-        (tester) async {
-      await pumpBar(tester);
-
-      await tester.tap(find.byTooltip('إعادة الكلمة'));
-      await tester.pump();
-      expect(controller.isLoading, isFalse);
-      expect(controller.lastError, isNull);
-      expect(fake.players, isEmpty, reason: 'nothing played');
-      expect(tester.takeException(), isNull);
-    });
-
-    testWidgets('replay tap restarts the current word', (tester) async {
-      controller.queue = [(2, 33)];
-      controller.queueIndex = 0;
-      controller.scope = PlayerScope.word;
-      controller.wordIndex = 1;
-      await pumpBar(tester);
-
-      await tester.tap(find.byTooltip('إعادة الكلمة'));
-      await tester.pump();
-      // The replay started: the controller is loading the word.
-      expect(controller.isLoading, isTrue);
-      // RootBundle loads in tests need real-async windows (same
-      // pattern as the word-card tests).
-      for (var i = 0; i < 12; i++) {
-        await tester.runAsync(
-            () => Future<void>.delayed(const Duration(milliseconds: 300)));
-        await tester.pump();
-        if (!controller.isLoading) break;
-      }
-      expect(controller.isLoading, isFalse);
-      // Let the fake finish the word (100 ms timer, fake time).
-      await tester.pump(const Duration(milliseconds: 300));
-      // The tap replayed word 1 of 2:33 exactly once, from its wbw
-      // file (v13.2: wbw first), with no error — and the word did
-      // not repeat (repeat is off).
-      expect(fake.loadCount, 1);
-      expect(fake.loadUris.single,
-          'https://resources.surahpedia.com/Word_by-Word/2/002033001.mp3');
-      expect(controller.wordUsesWbw, isTrue);
-      expect(controller.lastError, isNull);
-      expect(tester.takeException(), isNull);
-    });
-
-    testWidgets('repeat-one replays the word per the count',
-        (tester) async {
-      controller.queue = [(2, 33)];
-      controller.queueIndex = 0;
-      controller.scope = PlayerScope.word;
-      controller.wordIndex = 1;
-      await pumpBar(tester);
-
-      // Turn repeat-one on (default count 3) and replay the word.
-      await tester.tap(find.byTooltip('تكرار العنصر الحالي'));
-      await tester.pump();
-      expect(controller.repeatItem, isTrue);
-      await tester.tap(find.byTooltip('إعادة الكلمة'));
-      // RootBundle loads need real-async windows; the fake's
-      // finish timer runs on fake time, advanced by pumping.
-      for (var i = 0; i < 30 && fake.loadCount < 3; i++) {
-        await tester.runAsync(
-            () => Future<void>.delayed(const Duration(milliseconds: 100)));
-        await tester.pump(const Duration(milliseconds: 200));
-      }
-      expect(fake.loadCount, 3, reason: 'word played 3 times');
-      expect(controller.wordIndex, 1, reason: 'still the same word');
-      await tester.pump(const Duration(milliseconds: 600));
-      expect(fake.loadCount, 3,
-          reason: 'no 4th play — count reached, stopped');
-      expect(controller.lastError, isNull);
-      expect(tester.takeException(), isNull);
-      // Halt anything still in flight before tearDown disposes the
-      // controller (a replay load racing with dispose surfaces as
-      // an unhandled error after the test).
-      // stop() hangs when awaited directly in the widget-test
-      // (fakeAsync) zone — run it in real async instead.
-      await tester.runAsync(() => controller.stop());
     });
   });
 

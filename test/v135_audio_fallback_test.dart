@@ -12,17 +12,18 @@ import 'package:noor_quran/data/quran_audio.dart';
 import 'fake_just_audio.dart';
 import 'zip_fixture.dart';
 
-/// v13.5 audio fallbacks, order updated in v13.6.
+/// v13.5 audio fallbacks, order updated in v13.6 and v13.7.
 ///
 /// Word audio: SurahPedia FIRST (resources.surahpedia.com — Wahy's
 /// host, byte-identical files), then the Quran.com wbw hosts.
-/// Ayah audio: one per-surah ZIP from `http://www.everyayah.com`
-/// (Wahy's exact method — the address that opens from the user's
-/// Syrian network), unzipped into the per-ayah cache; the bare-HTTPS
-/// per-ayah file stays as the secondary fallback. No real HTTP is
-/// made: MockClient serves in-memory ZIPs built by
-/// test/zip_fixture.dart, and the fake just_audio platform stands
-/// in for playback.
+/// Ayah audio (v13.7 order): the per-ayah file over the www host
+/// (`http://www.everyayah.com/...`, Wahy's address — the one that
+/// opens from the user's Syrian network) goes FIRST, so playback
+/// starts in seconds; the per-surah ZIP is the fallback (and the
+/// explicit bulk download), and the bare-HTTPS per-ayah file is
+/// the last resort. No real HTTP is made: MockClient serves
+/// in-memory ZIPs built by test/zip_fixture.dart, and the fake
+/// just_audio platform stands in for playback.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final fake = installFakeJustAudio();
@@ -146,6 +147,11 @@ void main() {
         if (request.url.path.endsWith('.zip')) {
           return http.Response.bytes(zipBytes, 200);
         }
+        // v13.7: the www per-ayah attempt goes first and 404s here,
+        // so the ZIP path runs.
+        if (request.url.host == 'www.everyayah.com') {
+          return http.Response.bytes([], 404);
+        }
         return http.Response.bytes([9, 9], 200);
       }));
       final tunaiji = reciters[12];
@@ -159,6 +165,7 @@ void main() {
       expect(seventh, isNotNull);
       expect(await seventh!.readAsBytes(), [7]);
       expect(requested, [
+        'http://www.everyayah.com/data/khalefa_al_tunaiji_64kbps/001001.mp3',
         'http://www.everyayah.com/data/khalefa_al_tunaiji_64kbps/zips/001.zip',
       ]);
       // The ZIP itself is deleted after extraction — the extracted
@@ -185,11 +192,15 @@ void main() {
       expect(await file!.readAsBytes(), [2, 2, 2]);
     });
 
-    test('failed ZIP falls back to the per-ayah file', () async {
+    test('failed www per-ayah and ZIP fall back to the bare per-ayah file',
+        () async {
       final requested = <String>[];
       service = await buildService(MockClient((request) async {
         requested.add(request.url.toString());
         if (request.url.path.endsWith('.zip')) {
+          return http.Response.bytes([], 404);
+        }
+        if (request.url.host == 'www.everyayah.com') {
           return http.Response.bytes([], 404);
         }
         return http.Response.bytes([7, 7], 200);
@@ -199,6 +210,7 @@ void main() {
       expect(file, isNotNull);
       expect(await file!.readAsBytes(), [7, 7]);
       expect(requested, [
+        'http://www.everyayah.com/data/Husary_64kbps/112002.mp3',
         'http://www.everyayah.com/data/Husary_64kbps/zips/112.zip',
         'https://everyayah.com/data/Husary_64kbps/112002.mp3',
       ]);
@@ -216,6 +228,11 @@ void main() {
         if (request.url.path.endsWith('.zip')) {
           return http.Response.bytes(zipBytes, 200);
         }
+        // v13.7: the www per-ayah attempt goes first and 404s here,
+        // so the ZIP path runs.
+        if (request.url.host == 'www.everyayah.com') {
+          return http.Response.bytes([], 404);
+        }
         return http.Response.bytes([7], 200);
       }));
       final tunaiji = reciters[12];
@@ -224,6 +241,7 @@ void main() {
       expect(file, isNotNull);
       expect(await file!.readAsBytes(), [7]);
       expect(requested, [
+        'http://www.everyayah.com/data/khalefa_al_tunaiji_64kbps/001007.mp3',
         'http://www.everyayah.com/data/khalefa_al_tunaiji_64kbps/zips/001.zip',
         'https://everyayah.com/data/khalefa_al_tunaiji_64kbps/001007.mp3',
       ]);
@@ -236,6 +254,11 @@ void main() {
       service = await buildService(MockClient((request) async {
         if (request.url.path.endsWith('.zip')) {
           return http.Response.bytes([9, 9, 9], 200);
+        }
+        // v13.7: the www per-ayah attempt goes first and 404s here,
+        // so the garbage-ZIP path is exercised.
+        if (request.url.host == 'www.everyayah.com') {
+          return http.Response.bytes([], 404);
         }
         return http.Response.bytes([4], 200);
       }));
