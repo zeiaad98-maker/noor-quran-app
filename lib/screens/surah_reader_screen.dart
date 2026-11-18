@@ -555,6 +555,7 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
       onPlayAyah: () {
         unawaited(_audioController.playAyah(surah, verse));
       },
+      onPlayPage: () => _openPlayerSheet(scope: PlayerScope.page),
       onContinueFromAyah: () {
         unawaited(_audioController.playFromAyah(surah, verse));
       },

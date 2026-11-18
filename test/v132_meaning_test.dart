@@ -161,9 +161,10 @@ void main() {
     expect(stats.total, 77429);
     // Shortening never drops a meaning: same count as before.
     expect(stats.withShortMeaning, coverage.withMeaning);
-    expect(stats.withShortMeaning, 50409);
-    // 50,409 / 77,429 = 65.1% of words have a short meaning gloss
-    // (v13.6: مخلوف + additions lift it from 49,054 / 63.4%).
+    expect(stats.withShortMeaning, 50411);
+    // 50,411 / 77,429 = 65.1% of words have a short meaning gloss
+    // (v13.6: مخلوف + additions lift it from 49,054 / 63.4%;
+    // v13.9 adds 2 more verified additions: 15:11، 15:12).
     expect(stats.withShortMeaning / stats.total, greaterThan(0.65));
     // NO displayed gloss exceeds the 160-char cap.
     expect(stats.over160, 0);

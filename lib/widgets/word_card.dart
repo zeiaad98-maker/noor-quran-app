@@ -163,6 +163,8 @@ enum _WahyTab { meaning, sarf, irab, qiraat }
 /// Every button has a working callback: [onPlayWord] (green ▶),
 /// [onRepeatWord] (circled ▶ — repeats the word [repeatCount]
 /// times, never the reciter-voice clip), [onPlayAyah] (الآية),
+/// [onPlayPage] (الصفحة — v13.9: opens the player sheet on the
+/// page scope and plays the whole current page),
 /// [onContinueFromAyah] (استمرار — the surah from this ayah on),
 /// [onGoToLastReading] (آخر قراءة), [onOpenTafsir] (تفاسير),
 /// [onOpenReciterPicker] (reciter pill),
@@ -183,6 +185,7 @@ Future<void> showWordCard({
   required void Function(int wordIndex) onPlayWord,
   required void Function(int wordIndex) onRepeatWord,
   required VoidCallback onPlayAyah,
+  required VoidCallback onPlayPage,
   required VoidCallback onContinueFromAyah,
   required VoidCallback onGoToLastReading,
   required VoidCallback onOpenNotesScreen,
@@ -203,6 +206,7 @@ Future<void> showWordCard({
       onPlayWord: onPlayWord,
       onRepeatWord: onRepeatWord,
       onPlayAyah: onPlayAyah,
+      onPlayPage: onPlayPage,
       onContinueFromAyah: onContinueFromAyah,
       onGoToLastReading: onGoToLastReading,
       onOpenNotesScreen: onOpenNotesScreen,
@@ -222,6 +226,7 @@ class WordCard extends StatefulWidget {
   final void Function(int wordIndex) onPlayWord;
   final void Function(int wordIndex) onRepeatWord;
   final VoidCallback onPlayAyah;
+  final VoidCallback onPlayPage;
   final VoidCallback onContinueFromAyah;
   final VoidCallback onGoToLastReading;
   final VoidCallback onOpenNotesScreen;
@@ -239,6 +244,7 @@ class WordCard extends StatefulWidget {
     required this.onPlayWord,
     required this.onRepeatWord,
     required this.onPlayAyah,
+    required this.onPlayPage,
     required this.onContinueFromAyah,
     required this.onGoToLastReading,
     required this.onOpenNotesScreen,
@@ -261,6 +267,13 @@ class _WordCardState extends State<WordCard> {
   late final List<TapGestureRecognizer> _wordTapRecognizers;
   _WahyTab _tab = _WahyTab.meaning;
   String? _gloss;
+  // v13.9: which source the meaning comes from (see
+  // QuranWordData.glossSourceForWord): 'addition' / 'makhloof' /
+  // 'gharib' / 'lexicon' = a real meaning; 'morph' / 'none' = no
+  // meaning source matched, so the المعنى tab says so honestly
+  // instead of showing the morphology text (which is what the
+  // الإعراب tab already shows).
+  String? _glossSource;
   String? _morph;
   List<QiraatVariant> _qiraatForWord = const [];
   List<QiraatVariant> _qiraatForAyah = const [];
@@ -328,6 +341,8 @@ class _WordCardState extends State<WordCard> {
       AyahBookmarks.isBookmarked(widget.surah, widget.verse),
       AyahNotes.getNote(widget.surah, widget.verse),
       QuranWordData.hizbQuarterLabel(widget.surah, widget.verse),
+      QuranWordData.glossSourceForWord(
+          widget.surah, widget.verse, _lookupText),
     ]);
     if (!mounted || index != _wordIndex) return;
     setState(() {
@@ -339,6 +354,7 @@ class _WordCardState extends State<WordCard> {
       _noteText = results[5] as String?;
       _hasNote = _noteText != null;
       _quarterLabel = results[6] as String?;
+      _glossSource = results[7] as String?;
       _loading = false;
     });
   }
@@ -877,6 +893,29 @@ class _WordCardState extends State<WordCard> {
   Widget _tabBody() {
     switch (_tab) {
       case _WahyTab.meaning:
+        // v13.9: when no meaning source matched this word (source
+        // 'morph' / 'none'), the meaning tab must NOT show the
+        // morphology description — that text is what the الإعراب tab
+        // already shows, and the two tabs were identical. Say so
+        // honestly and point at the tafsir (one tap away in the card).
+        if (_glossSource == 'morph' || _glossSource == 'none') {
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'لا يوجد معنى مختصر لهذه الكلمة في المصادر المتوفرة.',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.amiri(fontSize: 19),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'معناها من سياق الآية — افتح «تفاسير» من البطاقة.',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.amiri(fontSize: 13, color: Colors.grey),
+              ),
+            ],
+          );
+        }
         return Text(
           _gloss ?? 'كلمة من كلمات القرآن الكريم',
           textAlign: TextAlign.center,
@@ -1200,7 +1239,7 @@ class _WordCardState extends State<WordCard> {
             widget.onPlayAyah();
           },
         ),
-        const SizedBox(width: 14),
+        const SizedBox(width: 8),
         _bottomStack(
           keyName: 'continueButton',
           icon: Icons.menu_book,
@@ -1210,7 +1249,17 @@ class _WordCardState extends State<WordCard> {
             widget.onContinueFromAyah();
           },
         ),
-        const SizedBox(width: 10),
+        const SizedBox(width: 8),
+        _bottomStack(
+          keyName: 'playPageButton',
+          icon: Icons.play_circle_outline,
+          label: 'الصفحة',
+          onTap: () {
+            Navigator.of(context).pop();
+            widget.onPlayPage();
+          },
+        ),
+        const SizedBox(width: 8),
         Expanded(
           child: InkWell(
             key: const ValueKey('reciterButton'),
@@ -1250,7 +1299,7 @@ class _WordCardState extends State<WordCard> {
             ),
           ),
         ),
-        const SizedBox(width: 10),
+        const SizedBox(width: 8),
         InkWell(
           key: const ValueKey('playbackSettingsButton'),
           borderRadius: BorderRadius.circular(10),
@@ -1288,7 +1337,7 @@ class _WordCardState extends State<WordCard> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, color: _green, size: 30),
+            Icon(icon, color: _green, size: 28),
             const SizedBox(height: 2),
             Text(
               label,

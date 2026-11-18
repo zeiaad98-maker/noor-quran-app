@@ -22,12 +22,9 @@ import 'package:noor_quran/data/word_meanings.dart';
 ///   alef the dagger represents, e.g. ذَٰلِكَ vs ذَلِكَ — they keep
 ///   their morphology gloss, so withGloss stays 100%).
 ///
-/// v13.6 — مخلوف «كلمات القرآن» short glosses (+ 1 additions gloss)
-///   as the FIRST meaning source:
-///   withMakhloof 10,308 (strict matching: exact + token-in-phrase
-///   only, no containment), withAddition 1, withMeaning 49,054 ->
-///   50,409 (65.1%). withGharib 9,851 and withLexicon 46,199 are
-///   unchanged (independent per-source counts).
+/// v13.9 — two more verified additions glosses from التفسير الميسر
+///   (15:11 يَسْتَهْزِئُونَ «يسخرون به.»، 15:12 كَذَٰلِكَ «مثل ذلك.»):
+///   withAddition 1 -> 3, withMeaning 50,409 -> 50,411.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -44,17 +41,18 @@ void main() {
         'withGloss=${stats.withGloss}');
     expect(stats.total, 77429);
     // مخلوف short glosses (v13.6, strict matching) cover 10,308 words
-    // as first source; the additions file covers 1 word (4:4 فَكُلُوهُ).
+    // as first source; the additions file covers 3 words (4:4
+    // فَكُلُوهُ + v13.9: 15:11 يَسْتَهْزِئُونَ، 15:12 كَذَٰلِكَ).
     expect(stats.withMakhloof, 10308);
-    expect(stats.withAddition, 1);
+    expect(stats.withAddition, 3);
     // غريب القرآن alone covered 9,079 (11.7%) before the lexicon,
     // 9,851 after the v12 dagger-alef fix (see the header comment).
     expect(stats.withGharib, 9851);
     // مفردات الراغب (root lexicon) covers 46,199 words on its own.
     expect(stats.withLexicon, 46199);
     // Combined meaning coverage: additions ∪ مخلوف ∪ غريب ∪ lexicon =
-    // 50,409 (65.1%).
-    expect(stats.withMeaning, 50409);
+    // 50,411 (65.1%).
+    expect(stats.withMeaning, 50411);
     // A gloss exists for EVERY word (meaning or morphology description).
     expect(stats.withGloss, stats.total);
   });

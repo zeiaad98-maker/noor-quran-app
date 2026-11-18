@@ -125,6 +125,7 @@ void main() {
     late List<int> repeatedWords;
     late List<(int, int)> playedAyahs;
     late List<(int, int)> continuedAyahs;
+    late int pageTaps;
     late int lastReadingTaps;
     late int notesTaps;
     late int tafsirTaps;
@@ -136,6 +137,7 @@ void main() {
       repeatedWords = <int>[];
       playedAyahs = <(int, int)>[];
       continuedAyahs = <(int, int)>[];
+      pageTaps = 0;
       lastReadingTaps = 0;
       notesTaps = 0;
       tafsirTaps = 0;
@@ -166,6 +168,7 @@ void main() {
                   onPlayWord: playedWords.add,
                   onRepeatWord: repeatedWords.add,
                   onPlayAyah: () => playedAyahs.add((surah, verse)),
+                  onPlayPage: () => pageTaps++,
                   onContinueFromAyah: () =>
                       continuedAyahs.add((surah, verse)),
                   onGoToLastReading: () => lastReadingTaps++,
@@ -238,6 +241,7 @@ void main() {
         'tafsirButton',
         'playAyahButton',
         'continueButton',
+        'playPageButton',
         'reciterButton',
         'playbackSettingsButton',
       ]) {
@@ -381,6 +385,9 @@ void main() {
 
       await tapCloser('continueButton');
       expect(continuedAyahs, [(3, 7)]);
+
+      await tapCloser('playPageButton');
+      expect(pageTaps, 1);
 
       await tapCloser('lastReadingButton');
       expect(lastReadingTaps, 1);
