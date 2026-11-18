@@ -141,6 +141,18 @@ String ayahFileName(int surah, int ayah) =>
 String everyayahUrl(Reciter reciter, int surah, int ayah) =>
     'https://everyayah.com/data/${reciter.everyayah}/${ayahFileName(surah, ayah)}.mp3';
 
+/// Per-ayah mp3 of [reciter] from the www host (v13.7) — the same
+/// address Wahy uses: plain HTTP www, which 301-redirects to
+/// `https://www.everyayah.com/...` (verified live 2026-11-18:
+/// Tunaiji 002014.mp3 = 200, 159,379 B). Unlike the bare-HTTPS
+/// [everyayahUrl] above, this host opens from the user's Syrian
+/// network, so it is the first choice for on-demand ayah audio:
+/// one small file (~80–160 KB) starts playback in seconds, where
+/// the v13.5 ZIP-first order forced a whole-surah download
+/// (~58 MB for Baqarah) before the first sound.
+String everyayahWwwUrl(Reciter reciter, int surah, int ayah) =>
+    'http://www.everyayah.com/data/${reciter.everyayah}/${ayahFileName(surah, ayah)}.mp3';
+
 /// Per-surah ZIP of [reciter] from everyayah.com (v13.5) — Wahy's
 /// exact method: Wahy downloads these ZIPs, which is why its ayah
 /// audio works on the user's phone while our bare-HTTPS per-ayah

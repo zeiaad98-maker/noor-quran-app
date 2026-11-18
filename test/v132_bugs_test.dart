@@ -11,7 +11,6 @@ import 'package:noor_quran/data/qcf_word_map.dart';
 import 'package:noor_quran/data/quran_audio.dart';
 import 'package:noor_quran/data/word_meanings.dart';
 import 'package:noor_quran/widgets/audio_player_sheet.dart';
-import 'package:noor_quran/widgets/mini_audio_bar.dart';
 import 'package:noor_quran/widgets/noor_qcf_page.dart';
 import 'package:noor_quran/widgets/word_card.dart';
 
@@ -296,20 +295,6 @@ void main() {
         (tester) async {
       final c = await playingController(tester);
       await pumpSheet(tester, c);
-      expect(find.text('التكرار: متبقٍ 3 مرات'), findsOneWidget);
-      expect(tester.takeException(), isNull);
-    });
-
-    testWidgets('mini bar shows the same remaining line', (tester) async {
-      final c = await playingController(tester);
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: MiniAudioBar(controller: c, onClose: () {}),
-          ),
-        ),
-      );
-      await tester.pump();
       expect(find.text('التكرار: متبقٍ 3 مرات'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });

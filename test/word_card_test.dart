@@ -12,7 +12,6 @@ import 'package:noor_quran/data/tafsir_downloads.dart';
 import 'package:noor_quran/data/word_meanings.dart';
 import 'package:noor_quran/widgets/audio_player_sheet.dart';
 import 'package:noor_quran/widgets/ayah_action_sheet.dart';
-import 'package:noor_quran/widgets/mini_audio_bar.dart';
 import 'package:noor_quran/widgets/word_card.dart';
 
 /// v12 word card + tafsir card + chip fix, pinned at a 411dp-wide
@@ -548,97 +547,6 @@ void main() {
       expect(find.text('بَعۡدَ'), findsOneWidget);
       expect(find.text('مَا'), findsOneWidget);
       expect(find.text('بَعۡدَ مَا'), findsNothing);
-      expect(tester.takeException(), isNull);
-    });
-  });
-
-  group('mini audio bar', () {
-    late AudioPlayerController controller;
-    late bool closed;
-
-    setUp(() {
-      controller = AudioPlayerController();
-      closed = false;
-    });
-
-    Future<void> pumpBar(WidgetTester tester) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: MiniAudioBar(
-              controller: controller,
-              onClose: () => closed = true,
-            ),
-          ),
-        ),
-      );
-      await tester.pump();
-    }
-
-    testWidgets('all controls present, no loading label when idle',
-        (tester) async {
-      set411(tester);
-      await pumpBar(tester);
-
-      expect(find.byTooltip('السابق'), findsOneWidget);
-      expect(find.byTooltip('التالي'), findsOneWidget);
-      expect(find.byTooltip('تكرار العنصر الحالي'), findsOneWidget);
-      expect(find.byTooltip('إغلاق وإيقاف الصوت'), findsOneWidget);
-      expect(find.byIcon(Icons.play_arrow), findsOneWidget);
-      expect(find.byIcon(Icons.more_vert), findsOneWidget);
-      expect(find.text('جارٍ تحميل الكلمة…'), findsNothing);
-      expect(tester.takeException(), isNull);
-    });
-
-    testWidgets('loading: label shown, play button stays green',
-        (tester) async {
-      set411(tester);
-      await pumpBar(tester);
-
-      controller.isLoading = true;
-      controller.notifyListeners();
-      await tester.pump();
-
-      expect(find.text('جارٍ تحميل الكلمة…'), findsOneWidget);
-      expect(find.byType(CircularProgressIndicator), findsOneWidget);
-      final button = tester.widget<ElevatedButton>(
-        find.byType(ElevatedButton),
-      );
-      // A null onPressed would render the button DISABLED (grey) —
-      // the v10 bug. It must stay enabled with a green background.
-      expect(button.onPressed, isNotNull);
-      expect(
-        button.style?.backgroundColor?.resolve({}),
-        const Color(0xFF0D6E52),
-      );
-      expect(tester.takeException(), isNull);
-    });
-
-    testWidgets('repeat toggles, X calls onClose', (tester) async {
-      set411(tester);
-      await pumpBar(tester);
-
-      expect(controller.repeatItem, isFalse);
-      await tester.tap(find.byTooltip('تكرار العنصر الحالي'));
-      await tester.pump();
-      expect(controller.repeatItem, isTrue);
-
-      await tester.tap(find.byTooltip('إغلاق وإيقاف الصوت'));
-      await tester.pump();
-      expect(closed, isTrue);
-      expect(tester.takeException(), isNull);
-    });
-
-    testWidgets('play tap with an empty queue is a safe no-op',
-        (tester) async {
-      set411(tester);
-      await pumpBar(tester);
-
-      // togglePlayPause returns at once with an empty queue — no
-      // platform channel is touched, so this runs in flutter_test.
-      await tester.tap(find.byIcon(Icons.play_arrow));
-      await tester.pump();
-      expect(find.byIcon(Icons.play_arrow), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   });

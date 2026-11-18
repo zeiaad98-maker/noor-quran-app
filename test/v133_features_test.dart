@@ -120,10 +120,42 @@ void main() {
       );
       expect(file, isNotNull);
       expect(await file!.length(), 1000);
-      // Progress runs over the ZIP download (one download, so it is
-      // monotonic and ends at the ZIP's own total, not the entry's).
-      expect(progress.last, (zipBytes.length, zipBytes.length));
+      // v13.7: progress runs over the per-ayah file now (it is
+      // tried first) — one download, so it is monotonic and ends
+      // at the file's own total.
+      expect(progress.last, (1000, 1000));
       // Progress really moved (not one jump at the end).
+      expect(progress.map((p) => p.$1).toSet().length, greaterThan(5));
+      for (var i = 1; i < progress.length; i++) {
+        expect(progress[i].$1, greaterThanOrEqualTo(progress[i - 1].$1));
+      }
+    });
+
+    test('slow ZIP download succeeds when the www per-ayah file is '
+        'unavailable', () async {
+      // Same slow stream, but the www per-ayah file 404s, so the
+      // ZIP path runs: progress ends at the ZIP's own total.
+      AudioDownloadService.stallTimeout = const Duration(seconds: 1);
+      final bytes = List<int>.generate(1000, (i) => i % 256);
+      final zipBytes =
+          buildSurahZip({'002033.mp3': bytes}, stored: true);
+      final client = _FakeSlowClient(
+        bytes: bytes,
+        zipBytes: zipBytes,
+        failWww: true,
+        chunkGap: const Duration(milliseconds: 250),
+      );
+      await buildService(client);
+      final progress = <(int, int?)>[];
+      final file = await service.cacheAyahFile(
+        reciters[0],
+        2,
+        33,
+        onProgress: (r, t) => progress.add((r, t)),
+      );
+      expect(file, isNotNull);
+      expect(await file!.length(), 1000);
+      expect(progress.last, (zipBytes.length, zipBytes.length));
       expect(progress.map((p) => p.$1).toSet().length, greaterThan(5));
       for (var i = 1; i < progress.length; i++) {
         expect(progress[i].$1, greaterThanOrEqualTo(progress[i - 1].$1));
@@ -407,6 +439,10 @@ class _FakeSlowClient extends http.BaseClient {
   /// cacheAyahFile tries the ZIP first, then the per-ayah file).
   /// When null, [bytes] is served for every URL (the old behaviour).
   final List<int>? zipBytes;
+
+  /// When true, the www per-ayah host 404s (v13.7: the www file is
+  /// tried first, so this forces the ZIP path).
+  final bool failWww;
   final Duration chunkGap;
   final int failAttempts;
   final bool stall;
@@ -419,6 +455,7 @@ class _FakeSlowClient extends http.BaseClient {
   _FakeSlowClient({
     required this.bytes,
     this.zipBytes,
+    this.failWww = false,
     this.chunkGap = Duration.zero,
     this.failAttempts = 0,
     this.stall = false,
@@ -432,9 +469,15 @@ class _FakeSlowClient extends http.BaseClient {
     if (attempts <= failAttempts) {
       return http.StreamedResponse(const Stream.empty(), 500);
     }
-    // v13.5: the ZIP URL gets the real ZIP bytes (so the ZIP path
-    // succeeds and the per-ayah fallback is never reached); any
-    // other URL gets the raw per-ayah bytes.
+    if (failWww &&
+        request.url.host == 'www.everyayah.com' &&
+        !request.url.path.endsWith('.zip')) {
+      return http.StreamedResponse(const Stream.empty(), 404);
+    }
+    // v13.7: the www per-ayah URL gets the raw per-ayah bytes (so
+    // the per-ayah path succeeds first); the ZIP URL gets the real
+    // ZIP bytes (so the ZIP path succeeds when the per-ayah file
+    // is unavailable).
     final serveBytes = (zipBytes != null &&
             request.url.toString().contains('/zips/'))
         ? zipBytes!
