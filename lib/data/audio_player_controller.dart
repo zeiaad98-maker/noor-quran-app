@@ -634,7 +634,10 @@ class AudioPlayerController extends ChangeNotifier {
         // Prefetch the next ayah while this one plays, so page /
         // surah playback has no gap between ayahs on a weak
         // connection. Best-effort: failures are ignored, the next
-        // play falls back to streaming.
+        // play falls back to streaming. v13.10: the prefetch and
+        // the next play share one in-flight download per file (the
+        // download service dedupes by target path), so the prefetch
+        // can never corrupt the foreground load.
         final dl = downloads;
         if (dl != null && queueIndex + 1 < queue.length) {
           final nextAyah = queue[queueIndex + 1];

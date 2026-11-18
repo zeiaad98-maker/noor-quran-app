@@ -546,7 +546,41 @@ class AudioDownloadService extends ChangeNotifier {
   /// would delay the legacy host for nothing. A cancel also returns
   /// at once, with no backoff wait. Returns false on any failure.
   /// Never throws.
+  /// In-flight downloads keyed by target file path (v13.10): the
+  /// player prefetches the next ayah while the current one plays,
+  /// and when the current ayah ends the foreground load starts the
+  /// SAME file again — two concurrent [_fetchOnce] calls wrote the
+  /// same tmp file (same URL, same tmp path), corrupting it, so the
+  /// second ayah failed with "تعذّر تحميل الصوت" on the user's
+  /// phone (2026-11-18, page 3, هاني الرفاعي: ayah 6 played, ayah 7
+  /// failed). A second caller for a file already downloading now
+  /// awaits the first caller's future instead of starting a
+  /// duplicate download. Awaiting a prefetch's future means a
+  /// stop() cannot abort that download — it finishes and caches
+  /// the file, which is harmless (the player already stopped).
+  final Map<String, Future<bool>> _inFlightFetches = {};
+
   Future<bool> _fetchToFile(
+    String url,
+    File file, {
+    DownloadProgressCallback? onProgress,
+    DownloadCancelCheck? isCancelled,
+  }) async {
+    final key = file.path;
+    final inFlight = _inFlightFetches[key];
+    if (inFlight != null) return inFlight;
+    final future = _fetchToFileUnshared(url, file,
+        onProgress: onProgress, isCancelled: isCancelled);
+    _inFlightFetches[key] = future;
+    try {
+      return await future;
+    } finally {
+      if (_inFlightFetches[key] == future) _inFlightFetches.remove(key);
+    }
+  }
+
+  /// The actual download loop (see [_fetchToFile] for the sharing).
+  Future<bool> _fetchToFileUnshared(
     String url,
     File file, {
     DownloadProgressCallback? onProgress,
