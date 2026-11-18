@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:material_ui/material_ui.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:quran/quran.dart' as quran;
@@ -77,56 +75,14 @@ class AudioPlayerSheet extends StatelessWidget {
                 _scopeTabs(textColor),
                 const SizedBox(height: 14),
                 _topRow(context),
-                // Loading label under the play button: while the word
-                // / ayah file buffers, the play button keeps its
-                // green background with the white spinner inside
-                // (see _topRow — onPressed is NEVER null, so the
-                // button never renders as a grey disabled circle).
-                // v13.3 (FIX A): while a download is in flight the
-                // user sees HONEST progress (bar + percent) and a
-                // Cancel button — the download has no wall-clock
-                // limit, so the user, not a timer, decides when to
-                // give up. When the server gives no length, the bar
-                // is indeterminate.
-                if (controller.isLoading)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: Column(
-                      children: [
-                        const Text(
-                          'جارٍ التحميل…',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 13, color: Colors.grey),
-                        ),
-                        if (controller.downloadProgress != null) ...[
-                          const SizedBox(height: 6),
-                          LinearProgressIndicator(
-                            value: controller.downloadProgress,
-                            backgroundColor: Colors.grey.shade300,
-                            color: _green,
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '${(controller.downloadProgress! * 100).round()}٪',
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                                fontSize: 12, color: Colors.grey),
-                          ),
-                        ],
-                        TextButton(
-                          onPressed: () =>
-                              unawaited(controller.stop()),
-                          child: Text(
-                            'إلغاء',
-                            style: GoogleFonts.amiri(
-                                fontSize: 14,
-                                fontWeight: FontWeight.bold,
-                                color: _green),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                // v13.11: NO download display at all — the user's
+                // choice (Wed 2026-11-18): while an ayah loads, the
+                // sheet shows no "جارٍ التحميل…" text, no progress
+                // bar and no percent. The play button keeps its
+                // white spinner inside while buffering (see _topRow),
+                // and the ✕ button still stops a stuck load and
+                // closes the sheet. (The v13.3 honest-progress row
+                // was removed here, not hidden.)
                 const SizedBox(height: 8),
                 if (ayah != null) _currentLabelWidget(controller, surah!, verse!),
                 // v13.2: the word plays from Quran.com's dedicated

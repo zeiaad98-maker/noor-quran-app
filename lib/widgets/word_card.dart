@@ -268,11 +268,11 @@ class _WordCardState extends State<WordCard> {
   _WahyTab _tab = _WahyTab.meaning;
   String? _gloss;
   // v13.9: which source the meaning comes from (see
-  // QuranWordData.glossSourceForWord): 'addition' / 'makhloof' /
-  // 'gharib' / 'lexicon' = a real meaning; 'morph' / 'none' = no
-  // meaning source matched, so the المعنى tab says so honestly
-  // instead of showing the morphology text (which is what the
-  // الإعراب tab already shows).
+  // QuranWordData.glossSourceForWord): 'tafsircenter' / 'addition' /
+  // 'makhloof' / 'gharib' / 'lexicon' = a real meaning; 'morph' /
+  // 'none' = no meaning source matched, so the المعنى tab says so
+  // honestly instead of showing the morphology text (which is what
+  // the الإعراب tab already shows).
   String? _glossSource;
   String? _morph;
   List<QiraatVariant> _qiraatForWord = const [];
@@ -916,10 +916,28 @@ class _WordCardState extends State<WordCard> {
             ],
           );
         }
-        return Text(
-          _gloss ?? 'كلمة من كلمات القرآن الكريم',
-          textAlign: TextAlign.center,
-          style: GoogleFonts.amiri(fontSize: 19),
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              _gloss ?? 'كلمة من كلمات القرآن الكريم',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.amiri(fontSize: 19),
+            ),
+            // v13.11: the Tafsir Center meanings are CC BY 4.0 — the
+            // licence's free permission is conditional on attribution.
+            // The user approved a small discreet line (his words:
+            // «حط سطر صغير بالمصدر»), NOT a banner.
+            if (_glossSource == 'tafsircenter') ...[
+              const SizedBox(height: 10),
+              Text(
+                'المصدر: مركز تفسير للدراسات القرآنية — tafsir.net',
+                textAlign: TextAlign.center,
+                style:
+                    GoogleFonts.amiri(fontSize: 12, color: Colors.grey),
+              ),
+            ],
+          ],
         );
       case _WahyTab.sarf:
         return _sarfBody();
