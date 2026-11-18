@@ -8,6 +8,8 @@ import '../data/audio_player_controller.dart';
 import '../data/ayah_marks.dart';
 import '../data/ayah_notes.dart';
 import '../data/qcf_word_map.dart';
+import '../data/qiraat_data.dart';
+import '../data/quran_audio.dart';
 import '../data/surah_sciences.dart';
 import '../data/tafsir_downloads.dart';
 import '../data/word_meanings.dart';
@@ -35,7 +37,6 @@ import '../data/word_meanings.dart';
 const _green = Color(0xFF0D6E52);
 const _cream = Color(0xFFFBF6E9);
 const _khaki = Color(0xFFE7E2CF);
-const _khakiText = Color(0xFF5A5A48);
 
 /// Arabic-Indic digits for counters ("الكلمة ٨ من ٤٦").
 String arabicIndic(int n) {
@@ -131,24 +132,42 @@ String _normalizeQcf(String word) =>
 bool _isDiacritic(int codeUnit) => codeUnit >= 0x064B && codeUnit <= 0x0652;
 
 // ---------------------------------------------------------------------
-// Word card
+// Word card — Wahy style (v13.6)
 // ---------------------------------------------------------------------
 
-enum _WordMode { meaning, sarf, irab }
+/// The Wahy-style word card (v13.6): the approved sample
+/// ~/workspace/your_files/sample-word-card-wahy-v2.png is the spec —
+/// a cream bottom sheet, NOT the old centred dialog: ayah header
+/// with the tapped word in blue; 4 tabs (المعنى/التصريف/الإعراب/
+/// القراءات); right column of 4 round buttons; آخر قراءة bar;
+/// ملاحظة/تفاسير row; bottom bar (playback settings, reciter pill,
+/// استمرار, الآية).
+///
+/// EVERY button is wired to a working function (the user's order:
+/// "فعّلوا كل الأزرار") — there are no dead buttons. The word's own
+/// audio state never hides the meaning any more (the v13.5 bug: the
+/// card showed "جارٍ تحميل الصوت..." instead of the meaning): the
+/// meaning is always visible, and the loading spinner lives INSIDE
+/// the green play button; a failure shows a small retry row under
+/// the tabs.
 
-/// Shows the small word card as a centred dialog.
+const _blue = Color(0xFF2E7FD1);
+
+enum _WahyTab { meaning, sarf, irab, qiraat }
+
+/// Shows the Wahy-style word card as a bottom sheet.
 ///
 /// [wordIndex] is the TRUE 0-based Uthmani word index from the QCF
 /// word map (the same index the audio controller takes +1).
-/// [onPlayAyah] plays the whole AYAH (v13.2, UX D / best-apps rule
-/// 2): the ayah-listen action must be discoverable from any word
-/// tap — the small ۝ ornament is NOT the only way to hear an ayah.
-/// [audioController] drives the card's own loading / failure states
-/// (v13.3, FIX A/B): while the word file downloads the card shows
-/// the spinner + progress + إلغاء; on failure the plain message +
-/// إعادة المحاولة. [onOpenNotes] opens the ayah sheet's note editor
-/// (تعليقات); [onOpenTafsir] opens the tafsir card (المزيد ←
-/// التفسير).
+/// Every button has a working callback: [onPlayWord] (green ▶),
+/// [onRepeatWord] (circled ▶ — repeats the word [repeatCount]
+/// times, never the reciter-voice clip), [onPlayAyah] (الآية),
+/// [onContinueFromAyah] (استمرار — the surah from this ayah on),
+/// [onGoToLastReading] (آخر قراءة), [onOpenNotes] (ملاحظة),
+/// [onOpenTafsir] (تفاسير), [onOpenReciterPicker] (reciter pill),
+/// [onOpenPlaybackSettings] (bottom-left gear). The magnifier and
+/// the gear open the card's own sheets (word details / word
+/// settings) — no callback needed.
 Future<void> showWordCard({
   required BuildContext context,
   required int surah,
@@ -156,21 +175,33 @@ Future<void> showWordCard({
   required int wordIndex,
   required AudioPlayerController audioController,
   required void Function(int wordIndex) onPlayWord,
+  required void Function(int wordIndex) onRepeatWord,
   required VoidCallback onPlayAyah,
+  required VoidCallback onContinueFromAyah,
+  required VoidCallback onGoToLastReading,
   required VoidCallback onOpenNotes,
   required VoidCallback onOpenTafsir,
+  required VoidCallback onOpenReciterPicker,
+  required VoidCallback onOpenPlaybackSettings,
 }) {
-  return showDialog(
+  return showModalBottomSheet(
     context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
     builder: (context) => WordCard(
       surah: surah,
       verse: verse,
       wordIndex: wordIndex,
       audioController: audioController,
       onPlayWord: onPlayWord,
+      onRepeatWord: onRepeatWord,
       onPlayAyah: onPlayAyah,
+      onContinueFromAyah: onContinueFromAyah,
+      onGoToLastReading: onGoToLastReading,
       onOpenNotes: onOpenNotes,
       onOpenTafsir: onOpenTafsir,
+      onOpenReciterPicker: onOpenReciterPicker,
+      onOpenPlaybackSettings: onOpenPlaybackSettings,
     ),
   );
 }
@@ -181,9 +212,14 @@ class WordCard extends StatefulWidget {
   final int wordIndex;
   final AudioPlayerController audioController;
   final void Function(int wordIndex) onPlayWord;
+  final void Function(int wordIndex) onRepeatWord;
   final VoidCallback onPlayAyah;
+  final VoidCallback onContinueFromAyah;
+  final VoidCallback onGoToLastReading;
   final VoidCallback onOpenNotes;
   final VoidCallback onOpenTafsir;
+  final VoidCallback onOpenReciterPicker;
+  final VoidCallback onOpenPlaybackSettings;
 
   const WordCard({
     super.key,
@@ -192,9 +228,14 @@ class WordCard extends StatefulWidget {
     required this.wordIndex,
     required this.audioController,
     required this.onPlayWord,
+    required this.onRepeatWord,
     required this.onPlayAyah,
+    required this.onContinueFromAyah,
+    required this.onGoToLastReading,
     required this.onOpenNotes,
     required this.onOpenTafsir,
+    required this.onOpenReciterPicker,
+    required this.onOpenPlaybackSettings,
   });
 
   @override
@@ -203,15 +244,14 @@ class WordCard extends StatefulWidget {
 
 class _WordCardState extends State<WordCard> {
   late final List<QcfWordInfo> _words;
-  late int _wordIndex;
-  _WordMode _mode = _WordMode.meaning;
+  late final int _wordIndex;
+  _WahyTab _tab = _WahyTab.meaning;
   String? _gloss;
   String? _morph;
+  List<QiraatVariant> _qiraatForWord = const [];
+  List<QiraatVariant> _qiraatForAyah = const [];
   bool _loading = true;
-  // SurahApp toolbar state (v13.3, FIX B): is this ayah bookmarked
-  // (فاصل) / coloured (تلوين) / does it have a note (تعليقات)?
   bool _isBookmarked = false;
-  bool _isHighlighted = false;
   bool _hasNote = false;
 
   @override
@@ -232,17 +272,20 @@ class _WordCardState extends State<WordCard> {
     final results = await Future.wait([
       QuranWordData.wordGloss(widget.surah, widget.verse, _lookupText),
       QuranWordData.morphForWord(widget.surah, widget.verse, _lookupText),
+      QiraatData.variantsForWord(
+          widget.surah, widget.verse, _wordIndex, _lookupText),
+      QiraatData.variantsForAyah(widget.surah, widget.verse),
       AyahBookmarks.isBookmarked(widget.surah, widget.verse),
-      AyahHighlights.isHighlighted(widget.surah, widget.verse),
       AyahNotes.getNote(widget.surah, widget.verse),
     ]);
     if (!mounted) return;
     setState(() {
       _gloss = results[0] as String?;
       _morph = results[1] as String?;
-      _isBookmarked = results[2] as bool;
-      _isHighlighted = results[3] as bool;
-      _hasNote = (results[4] as String?) != null;
+      _qiraatForWord = results[2] as List<QiraatVariant>;
+      _qiraatForAyah = results[3] as List<QiraatVariant>;
+      _isBookmarked = results[4] as bool;
+      _hasNote = (results[5] as String?) != null;
       _loading = false;
     });
   }
@@ -253,241 +296,367 @@ class _WordCardState extends State<WordCard> {
     setState(() => _isBookmarked = now);
   }
 
-  Future<void> _toggleHighlight() async {
-    final now = await AyahHighlights.toggle(widget.surah, widget.verse);
-    if (!mounted) return;
-    setState(() => _isHighlighted = now);
-  }
-
-  void _goToWord(int index) {
-    if (index < 0 || index >= _words.length || index == _wordIndex) return;
-    setState(() => _wordIndex = index);
-    _loadWord();
-  }
-
-  String get _modeLabel {
-    switch (_mode) {
-      case _WordMode.meaning:
-        return 'المعنى';
-      case _WordMode.sarf:
-        return 'صرف';
-      case _WordMode.irab:
-        return 'إعراب';
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Dialog(
-      insetPadding:
-          const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
-      backgroundColor: isDark ? const Color(0xFF1E1F1E) : _cream,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: 360,
-          maxHeight: MediaQuery.of(context).size.height * 0.7,
-        ),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 10, 18, 14),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
+    final bg = isDark ? const Color(0xFF1E1F1E) : _cream;
+    return Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.85,
+      ),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
+      // The bottom bar (الآية / استمرار / reciter) is pinned OUTSIDE
+      // the scroll area: it is the card's primary action row and must
+      // stay visible and tappable even when the meaning is long (on a
+      // short screen the scrollable middle shrinks instead of pushing
+      // the bar below the fold — v13.6 fix). The Column is max-sized
+      // (NOT min): a min Column gives its Flexible child unbounded
+      // height, so the scroll view would size to its full content and
+      // push the bar off-screen. Max-sized, the Column fills the
+      // Container's 85% cap and the Flexible middle is bounded — the
+      // sheet is always 85% tall, like Wahy's card.
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.withValues(alpha: 0.4),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Flexible(
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // The pill shows the current section; tapping it
-                  // returns to المعنى (صرف / إعراب live in المزيد).
-                  Tooltip(
-                    message: 'عرض المعنى',
-                    child: InkWell(
-                      key: const ValueKey('modePill'),
-                      borderRadius: BorderRadius.circular(20),
-                      onTap: _mode == _WordMode.meaning
-                          ? null
-                          : () => setState(() => _mode = _WordMode.meaning),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: _khaki,
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.keyboard_arrow_down,
-                                size: 16, color: _green),
-                            const SizedBox(width: 2),
-                            Text(
-                              _modeLabel,
-                              style: GoogleFonts.amiri(
-                                fontSize: 15,
-                                fontWeight: FontWeight.bold,
-                                color: _green,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                  const Spacer(),
-                  IconButton(
-                    icon: const Icon(Icons.close, size: 20),
-                    color: Colors.grey,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
+                  _ayahHeader(isDark),
+                  const SizedBox(height: 10),
+                  _tabsRow(),
+                  _audioErrorRow(),
+                  const SizedBox(height: 10),
+                  _contentRow(isDark),
+                  const SizedBox(height: 14),
+                  Divider(
+                      height: 1, color: Colors.grey.withValues(alpha: 0.4)),
+                  const SizedBox(height: 12),
+                  _lastReadingBar(isDark),
+                  const SizedBox(height: 10),
+                  _notesTafsirRow(isDark),
                 ],
               ),
-              const SizedBox(height: 4),
-              Text(
-                _wordText,
-                textAlign: TextAlign.center,
-                style: GoogleFonts.amiri(
-                  fontSize: 40,
-                  fontWeight: FontWeight.bold,
-                  color: _green,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Flexible(
-                child: SingleChildScrollView(
-                  child: AnimatedBuilder(
-                    animation: widget.audioController,
-                    builder: (context, _) => _audioBody(),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 10),
-              _toolbar(),
-              const SizedBox(height: 10),
-              _playAyahButton(),
-              const SizedBox(height: 8),
-              _counterRow(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          _bottomBar(isDark),
+        ],
+      ),
+    );
+  }
+
+  Color get _boxColor =>
+      Theme.of(context).brightness == Brightness.dark
+          ? const Color(0xFF2A2B29)
+          : Colors.white;
+
+  Color get _khakiColor =>
+      Theme.of(context).brightness == Brightness.dark
+          ? const Color(0xFF33342F)
+          : _khaki;
+
+  /// The whole ayah in a white box, the tapped word in blue, the
+  /// verse number in a small medallion at the end (the sample's ٤).
+  Widget _ayahHeader(bool isDark) {
+    final baseStyle = GoogleFonts.amiri(
+      fontSize: 20,
+      color: Theme.of(context).textTheme.bodyLarge?.color,
+    );
+    final spans = <InlineSpan>[];
+    for (var i = 0; i < _words.length; i++) {
+      final isTapped = i == _wordIndex;
+      spans.add(TextSpan(
+        text: _words[i].text,
+        style: GoogleFonts.amiri(
+          fontSize: 20,
+          fontWeight: isTapped ? FontWeight.bold : FontWeight.normal,
+          color: isTapped ? _blue : baseStyle.color,
+        ),
+      ));
+      if (i < _words.length - 1) {
+        spans.add(const TextSpan(text: ' '));
+      }
+    }
+    spans.add(WidgetSpan(
+      alignment: PlaceholderAlignment.middle,
+      child: Container(
+        width: 26,
+        height: 26,
+        margin: const EdgeInsetsDirectional.only(start: 6),
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: _green, width: 1.5),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          arabicIndic(widget.verse),
+          style: GoogleFonts.amiri(
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+            color: _green,
+          ),
+        ),
+      ),
+    ));
+    return Container(
+      key: const ValueKey('ayahHeader'),
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: _boxColor,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: RichText(
+        textAlign: TextAlign.center,
+        text: TextSpan(style: baseStyle, children: spans),
+      ),
+    );
+  }
+
+  /// Tabs row (المعنى selected = green pill) with the solid green ▶
+  /// at the right edge. In RTL the first child is rightmost, so the
+  /// play button sits at the right, the tabs fill to its left.
+  Widget _tabsRow() {
+    return Row(
+      children: [
+        _playButton(),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Row(
+            children: [
+              _tabButton(_WahyTab.meaning, 'المعنى', 'tabMeaning'),
+              _tabButton(_WahyTab.sarf, 'التصريف', 'tabSarf'),
+              _tabButton(_WahyTab.irab, 'الإعراب', 'tabIrab'),
+              _tabButton(_WahyTab.qiraat, 'القراءات', 'tabQiraat'),
             ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _tabButton(_WahyTab tab, String label, String keyName) {
+    final selected = _tab == tab;
+    return Expanded(
+      child: InkWell(
+        key: ValueKey(keyName),
+        borderRadius: BorderRadius.circular(20),
+        onTap: selected ? null : () => setState(() => _tab = tab),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 7),
+          decoration: BoxDecoration(
+            color: selected ? _green : Colors.transparent,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            label,
+            style: GoogleFonts.amiri(
+              fontSize: 16,
+              fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+              color: selected
+                  ? Colors.white
+                  : Theme.of(context).textTheme.bodyLarge?.color,
+            ),
           ),
         ),
       ),
     );
   }
 
-  /// The card body, driven by the word audio's own state (v13.3,
-  /// FIX A/B — the approved sample-v133-word-loading.png):
-  /// while the word file downloads, the spinner + honest progress +
-  /// إلغاء; on failure, the plain message + إعادة المحاولة; otherwise
-  /// the meaning / صرف / إعراب body.
-  Widget _audioBody() {
-    final c = widget.audioController;
-    if (c.scope == PlayerScope.word && c.isLoading) {
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox(height: 12),
-          const SizedBox(
-            width: 28,
-            height: 28,
-            child: CircularProgressIndicator(
+  /// The solid green ▶. While the word file downloads, the spinner
+  /// lives INSIDE this button — the meaning is never hidden behind
+  /// a loading state (the v13.5 bug).
+  Widget _playButton() {
+    return AnimatedBuilder(
+      animation: widget.audioController,
+      builder: (context, _) {
+        final c = widget.audioController;
+        final loading = c.scope == PlayerScope.word && c.isLoading;
+        return InkWell(
+          key: const ValueKey('playWordButton'),
+          customBorder: const CircleBorder(),
+          onTap: loading ? null : () => widget.onPlayWord(_wordIndex),
+          child: Container(
+            width: 56,
+            height: 56,
+            decoration: const BoxDecoration(
               color: _green,
-              strokeWidth: 2.5,
+              shape: BoxShape.circle,
             ),
+            alignment: Alignment.center,
+            child: loading
+                ? const SizedBox(
+                    width: 26,
+                    height: 26,
+                    child: CircularProgressIndicator(
+                      color: Colors.white,
+                      strokeWidth: 3,
+                    ),
+                  )
+                : const Icon(Icons.play_arrow,
+                    color: Colors.white, size: 32),
           ),
-          const SizedBox(height: 12),
-          Text(
-            'جارٍ تحميل الصوت…',
-            style: GoogleFonts.amiri(fontSize: 16, color: Colors.grey),
-          ),
-          if (c.downloadProgress != null) ...[
-            const SizedBox(height: 10),
-            LinearProgressIndicator(
-              value: c.downloadProgress,
-              backgroundColor: Colors.grey.shade300,
-              color: _green,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              '${(c.downloadProgress! * 100).round()}٪',
-              style: GoogleFonts.amiri(fontSize: 13, color: Colors.grey),
-            ),
-          ],
-          const SizedBox(height: 8),
-          OutlinedButton(
-            onPressed: () async {
-              await c.stop();
-              if (mounted) Navigator.of(context).pop();
-            },
-            style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: _green),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-              ),
-            ),
-            child: Text(
-              'إلغاء',
-              style: GoogleFonts.amiri(
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
-                  color: _green),
-            ),
-          ),
-        ],
-      );
-    }
-    if (c.scope == PlayerScope.word && c.lastError != null) {
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox(height: 8),
-          Text(
-            'تعذّر تحميل الصوت',
-            textAlign: TextAlign.center,
-            style: GoogleFonts.amiri(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: Colors.red,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'تحقق من الاتصال وحاول مجدداً',
-            textAlign: TextAlign.center,
-            style: GoogleFonts.amiri(fontSize: 15, color: Colors.grey),
-          ),
-          const SizedBox(height: 10),
-          FilledButton(
-            onPressed: () => unawaited(c.retryLastError()),
-            style: FilledButton.styleFrom(backgroundColor: _green),
-            child: Text(
-              'إعادة المحاولة',
-              style: GoogleFonts.amiri(fontSize: 16),
-            ),
-          ),
-        ],
-      );
-    }
-    if (_loading) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 20),
-        child: Center(child: CircularProgressIndicator()),
-      );
-    }
-    return _modeBody();
+        );
+      },
+    );
   }
 
-  Widget _modeBody() {
-    switch (_mode) {
-      case _WordMode.meaning:
+  /// Word-audio failure: a small retry row under the tabs. The
+  /// meaning stays visible; only this row mentions the failure.
+  Widget _audioErrorRow() {
+    return AnimatedBuilder(
+      animation: widget.audioController,
+      builder: (context, _) {
+        final c = widget.audioController;
+        if (c.scope != PlayerScope.word || c.lastError == null) {
+          return const SizedBox.shrink();
+        }
+        return Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                'تعذّر تحميل الصوت',
+                style: GoogleFonts.amiri(fontSize: 14, color: Colors.red),
+              ),
+              const SizedBox(width: 10),
+              InkWell(
+                key: const ValueKey('retryWordAudioButton'),
+                onTap: () => unawaited(c.retryLastError()),
+                child: Text(
+                  'إعادة المحاولة',
+                  style: GoogleFonts.amiri(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: _green,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// Content box + right column of 3 round buttons (repeat, word
+  /// details, word settings). RTL: the column sits at the right.
+  Widget _contentRow(bool isDark) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Column(
+          children: [
+            _roundButton(
+              keyName: 'repeatWordButton',
+              icon: Icons.play_circle_outline,
+              tooltip: 'تكرار الكلمة',
+              onPressed: () => widget.onRepeatWord(_wordIndex),
+            ),
+            const SizedBox(height: 12),
+            _roundButton(
+              keyName: 'wordDetailsButton',
+              icon: Icons.search,
+              tooltip: 'تفاصيل الكلمة',
+              onPressed: () => showWordDetailsSheet(
+                context: context,
+                surah: widget.surah,
+                verse: widget.verse,
+                wordText: _wordText,
+                lookupText: _lookupText,
+              ),
+            ),
+            const SizedBox(height: 12),
+            _roundButton(
+              keyName: 'wordSettingsButton',
+              icon: Icons.settings,
+              tooltip: 'إعدادات الكلمة',
+              onPressed: () => showWordSettingsSheet(
+                context: context,
+                controller: widget.audioController,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 170),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: _boxColor,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _tabBody(),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _roundButton({
+    required String keyName,
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onPressed,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        key: ValueKey(keyName),
+        customBorder: const CircleBorder(),
+        onTap: onPressed,
+        child: Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            color: _boxColor,
+            shape: BoxShape.circle,
+            border: Border.all(color: _green, width: 1.5),
+          ),
+          alignment: Alignment.center,
+          child: Icon(icon, color: _green, size: 26),
+        ),
+      ),
+    );
+  }
+
+  Widget _tabBody() {
+    switch (_tab) {
+      case _WahyTab.meaning:
         return Text(
           _gloss ?? 'كلمة من كلمات القرآن الكريم',
           textAlign: TextAlign.center,
           style: GoogleFonts.amiri(fontSize: 19),
         );
-      case _WordMode.sarf:
+      case _WahyTab.sarf:
         return _sarfBody();
-      case _WordMode.irab:
+      case _WahyTab.irab:
         return _irabBody();
+      case _WahyTab.qiraat:
+        return _qiraatBody();
     }
   }
 
@@ -541,6 +710,13 @@ class _WordCardState extends State<WordCard> {
     );
   }
 
+  /// Simplified i'rab from the bundled morphology data (v12
+  /// behaviour, kept in v13.6): the tab says plainly that this is
+  /// a simplification, NOT a full per-word i'rab — the full data
+  /// (الجدول في إعراب القرآن) is a book on quranpedia.net, not a
+  /// per-word dataset, and wiring it is a separate data project.
+  /// Nothing here is invented: every line comes from the morphology
+  /// description.
   Widget _irabBody() {
     final morph = _morph;
     return Column(
@@ -568,104 +744,143 @@ class _WordCardState extends State<WordCard> {
     );
   }
 
-  /// The SurahApp-style toolbar (v13.3, FIX B — the approved
-  /// sample-v133-word-popup.png): one khaki bar, five columns.
-  /// * استماع: plays JUST this word (the wbw file), then closes the
-  ///   card — the mini bar shows below.
-  /// * فاصل: toggles the ayah bookmark (gold tint on the page, listed
-  ///   under الفواصل in ملاحظاتي). Filled icon while bookmarked.
-  /// * تلوين: toggles the ayah colour (green tint on the page).
-  ///   Filled icon while coloured.
-  /// * تعليقات: opens the ayah sheet's note editor. The icon is
-  ///   green while the ayah has a note.
-  /// * المزيد: صرف / إعراب (switch the card's mode) / التفسير (opens
-  ///   the tafsir card).
-  Widget _toolbar() {
+  /// القراءات tab (v13.6): real variant readings from the bundled
+  /// qiraat-variants data (MIT), matched to the tapped word by span
+  /// AND word text. A word with no variant says so honestly; an
+  /// ayah with no variant at all says so too.
+  Widget _qiraatBody() {
+    if (_qiraatForWord.isEmpty) {
+      if (_qiraatForAyah.isEmpty) {
+        return Text(
+          'لا توجد قراءات مختلفة لهذه الآية في المصدر (القراءات العشر).',
+          textAlign: TextAlign.center,
+          style: GoogleFonts.amiri(fontSize: 18),
+        );
+      }
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'هذه الكلمة تُقرأ بنفس اللفظ في القراءات العشر.',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.amiri(fontSize: 18),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'قراءات أخرى في هذه الآية:',
+            style: GoogleFonts.amiri(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: _green,
+            ),
+          ),
+          const SizedBox(height: 8),
+          for (final v in _qiraatForAyah) _qiraatVariant(v),
+        ],
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final v in _qiraatForWord) ...[
+          _qiraatVariant(v),
+          const SizedBox(height: 10),
+        ],
+      ],
+    );
+  }
+
+  Widget _qiraatVariant(QiraatVariant v) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          v.word,
+          textAlign: TextAlign.center,
+          style: GoogleFonts.amiri(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: _green,
+          ),
+        ),
+        const SizedBox(height: 4),
+        for (final r in v.readings)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text(
+              r.hafs
+                  ? '${r.text} — ${r.readers.join('، ')} (قراءة المصحف)'
+                  : '${r.text} — ${r.readers.join('، ')}',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.amiri(
+                fontSize: 17,
+                fontWeight: r.hafs ? FontWeight.bold : FontWeight.normal,
+                color: r.hafs ? _green : null,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// The khaki bar: bookmark-add square + آخر قراءة pill.
+  Widget _lastReadingBar(bool isDark) {
     return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: _khaki,
+        color: _khakiColor,
         borderRadius: BorderRadius.circular(12),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
       child: Row(
         children: [
-          _toolbarItem(
-            icon: Icons.play_arrow,
-            label: 'استمع',
-            iconSize: 28,
-            iconColor: _green,
-            onPressed: () {
-              final index = _wordIndex;
+          InkWell(
+            key: const ValueKey('bookmarkButton'),
+            borderRadius: BorderRadius.circular(10),
+            onTap: _toggleBookmark,
+            child: Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: _boxColor,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              alignment: Alignment.center,
+              child: Icon(
+                _isBookmarked ? Icons.bookmark : Icons.bookmark_add_outlined,
+                color: _green,
+                size: 26,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          InkWell(
+            key: const ValueKey('lastReadingButton'),
+            borderRadius: BorderRadius.circular(20),
+            onTap: () {
               Navigator.of(context).pop();
-              widget.onPlayWord(index);
+              widget.onGoToLastReading();
             },
-          ),
-          _toolbarItem(
-            icon:
-                _isBookmarked ? Icons.bookmark : Icons.bookmark_border,
-            label: 'فاصل',
-            active: _isBookmarked,
-            onPressed: _toggleBookmark,
-          ),
-          _toolbarItem(
-            icon: Icons.format_paint,
-            label: 'تلوين',
-            active: _isHighlighted,
-            onPressed: _toggleHighlight,
-          ),
-          _toolbarItem(
-            icon: Icons.comment_outlined,
-            label: 'تعليقات',
-            active: _hasNote,
-            onPressed: () {
-              Navigator.of(context).pop();
-              widget.onOpenNotes();
-            },
-          ),
-          Expanded(
-            child: PopupMenuButton<String>(
-              tooltip: 'المزيد',
-              padding: EdgeInsets.zero,
-              onSelected: (value) {
-                switch (value) {
-                  case 'sarf':
-                    setState(() => _mode = _WordMode.sarf);
-                  case 'irab':
-                    setState(() => _mode = _WordMode.irab);
-                  case 'tafsir':
-                    Navigator.of(context).pop();
-                    widget.onOpenTafsir();
-                }
-              },
-              itemBuilder: (context) => [
-                const PopupMenuItem<String>(
-                  value: 'sarf',
-                  child: Text('صرف'),
-                ),
-                const PopupMenuItem<String>(
-                  value: 'irab',
-                  child: Text('إعراب'),
-                ),
-                const PopupMenuItem<String>(
-                  value: 'tafsir',
-                  child: Text('التفسير'),
-                ),
-              ],
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.more_horiz,
-                        size: 24, color: _khakiText),
-                    const SizedBox(height: 2),
-                    Text(
-                      'المزيد',
-                      style:
-                          GoogleFonts.amiri(fontSize: 13, color: _khakiText),
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: _boxColor,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'آخر قراءة',
+                    style: GoogleFonts.amiri(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: _green,
                     ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(width: 6),
+                  const Icon(Icons.bookmark, color: _green, size: 20),
+                ],
               ),
             ),
           ),
@@ -674,99 +889,638 @@ class _WordCardState extends State<WordCard> {
     );
   }
 
-  Widget _toolbarItem({
-    required IconData icon,
-    required String label,
-    required VoidCallback onPressed,
-    bool active = false,
-    double iconSize = 24,
-    Color? iconColor,
-  }) {
-    final color = iconColor ?? (active ? _green : _khakiText);
-    return Expanded(
-      child: InkWell(
-        onTap: onPressed,
-        borderRadius: BorderRadius.circular(10),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: iconSize, color: color),
-              const SizedBox(height: 2),
-              Text(
-                label,
-                style: GoogleFonts.amiri(
-                    fontSize: 13, color: active ? _green : _khakiText),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// Full-width ayah-listen button (v13.2, UX D / best-apps rule 2):
-  /// hearing the AYAH must be obvious from any word tap — the small
-  /// ۝ ornament is not the only way. Separate from the word's own
-  /// استمع above (rule 6: word audio and ayah audio are different,
-  /// explicit actions). Closes the card and shows the mini bar.
-  Widget _playAyahButton() {
-    return SizedBox(
-      width: double.infinity,
-      child: FilledButton.icon(
-        onPressed: () {
-          Navigator.of(context).pop();
-          widget.onPlayAyah();
-        },
-        icon: const Icon(Icons.play_arrow, size: 20),
-        label: Text('استمع للآية',
-            style: GoogleFonts.amiri(
-                fontSize: 16, fontWeight: FontWeight.bold)),
-        style: FilledButton.styleFrom(
-          backgroundColor: _green,
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _counterRow() {
+  /// تفاسير + ملاحظة pills (each opens its card/sheet; the card
+  /// pops itself first).
+  Widget _notesTafsirRow(bool isDark) {
     return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        IconButton(
-          icon: const Icon(Icons.chevron_right, size: 20),
-          color: _wordIndex > 0 ? _green : Colors.grey,
-          tooltip: 'الكلمة السابقة',
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(),
-          onPressed:
-              _wordIndex > 0 ? () => _goToWord(_wordIndex - 1) : null,
+        Expanded(
+          child: _whitePill(
+            keyName: 'tafsirButton',
+            label: 'تفاسير',
+            icon: Icons.menu_book,
+            onTap: () {
+              Navigator.of(context).pop();
+              widget.onOpenTafsir();
+            },
+          ),
         ),
-        const SizedBox(width: 6),
-        Text(
-          'الكلمة ${arabicIndic(_wordIndex + 1)} من ${arabicIndic(_words.length)}',
-          style: GoogleFonts.amiri(fontSize: 14, color: Colors.grey),
-        ),
-        const SizedBox(width: 6),
-        IconButton(
-          icon: const Icon(Icons.chevron_left, size: 20),
-          color:
-              _wordIndex < _words.length - 1 ? _green : Colors.grey,
-          tooltip: 'الكلمة التالية',
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(),
-          onPressed: _wordIndex < _words.length - 1
-              ? () => _goToWord(_wordIndex + 1)
-              : null,
+        const SizedBox(width: 10),
+        Expanded(
+          child: _whitePill(
+            keyName: 'notesButton',
+            label: 'ملاحظة',
+            icon: _hasNote ? Icons.note_alt : Icons.note_add_outlined,
+            iconColor: _hasNote ? _green : null,
+            onTap: () {
+              Navigator.of(context).pop();
+              widget.onOpenNotes();
+            },
+          ),
         ),
       ],
     );
   }
+
+  Widget _whitePill({
+    required String keyName,
+    required String label,
+    required IconData icon,
+    required VoidCallback onTap,
+    Color? iconColor,
+  }) {
+    return InkWell(
+      key: ValueKey(keyName),
+      borderRadius: BorderRadius.circular(12),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: _boxColor,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              label,
+              style: GoogleFonts.amiri(
+                fontSize: 17,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Icon(icon, color: iconColor ?? _green, size: 22),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Bottom bar: الآية ▶ | استمرار | reciter pill | playback
+  /// settings. RTL: the first child is rightmost.
+  Widget _bottomBar(bool isDark) {
+    return Row(
+      children: [
+        _bottomStack(
+          keyName: 'playAyahButton',
+          icon: Icons.play_circle_outline,
+          label: 'الآية',
+          onTap: () {
+            Navigator.of(context).pop();
+            widget.onPlayAyah();
+          },
+        ),
+        const SizedBox(width: 14),
+        _bottomStack(
+          keyName: 'continueButton',
+          icon: Icons.menu_book,
+          label: 'استمرار',
+          onTap: () {
+            Navigator.of(context).pop();
+            widget.onContinueFromAyah();
+          },
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: InkWell(
+            key: const ValueKey('reciterButton'),
+            borderRadius: BorderRadius.circular(12),
+            onTap: () {
+              Navigator.of(context).pop();
+              widget.onOpenReciterPicker();
+            },
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: _boxColor,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: ListenableBuilder(
+                listenable: widget.audioController,
+                builder: (context, _) => Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        widget.audioController.reciter.name,
+                        overflow: TextOverflow.ellipsis,
+                        style: GoogleFonts.amiri(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: _green,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    const Icon(Icons.mic, color: _green, size: 20),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        InkWell(
+          key: const ValueKey('playbackSettingsButton'),
+          borderRadius: BorderRadius.circular(10),
+          onTap: () {
+            Navigator.of(context).pop();
+            widget.onOpenPlaybackSettings();
+          },
+          child: Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: _boxColor,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            alignment: Alignment.center,
+            child: const Icon(Icons.settings, color: _green, size: 24),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _bottomStack({
+    required String keyName,
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      key: ValueKey(keyName),
+      borderRadius: BorderRadius.circular(10),
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: _green, size: 30),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              style: GoogleFonts.amiri(fontSize: 13, color: _green),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------
+// Word details sheet (magnifier) — v13.6
+// ---------------------------------------------------------------------
+
+/// The magnifier button's sheet: the word's full lexicon entry
+/// (مفردات الراغب) + its full morphology description. Everything
+/// shown comes from the bundled data; a missing entry says so.
+Future<void> showWordDetailsSheet({
+  required BuildContext context,
+  required int surah,
+  required int verse,
+  required String wordText,
+  required String lookupText,
+}) {
+  return showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (context) => _WordDetailsSheet(
+      surah: surah,
+      verse: verse,
+      wordText: wordText,
+      lookupText: lookupText,
+    ),
+  );
+}
+
+class _WordDetailsSheet extends StatefulWidget {
+  final int surah;
+  final int verse;
+  final String wordText;
+  final String lookupText;
+
+  const _WordDetailsSheet({
+    required this.surah,
+    required this.verse,
+    required this.wordText,
+    required this.lookupText,
+  });
+
+  @override
+  State<_WordDetailsSheet> createState() => _WordDetailsSheetState();
+}
+
+class _WordDetailsSheetState extends State<_WordDetailsSheet> {
+  String? _lexicon;
+  String? _morph;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final results = await Future.wait([
+      QuranWordData.lexiconForWord(
+          widget.surah, widget.verse, widget.lookupText),
+      QuranWordData.morphForWord(
+          widget.surah, widget.verse, widget.lookupText),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _lexicon = results[0];
+      _morph = results[1];
+      _loading = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark ? const Color(0xFF1E1F1E) : _cream;
+    final root = _morph == null
+        ? null
+        : parseSarf(_morph!, widget.wordText).root;
+    return Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.7,
+      ),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+      child: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.grey.withValues(alpha: 0.4),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    widget.wordText,
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.amiri(
+                      fontSize: 32,
+                      fontWeight: FontWeight.bold,
+                      color: _green,
+                    ),
+                  ),
+                  if (root != null) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      'الجذر: $root',
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.amiri(fontSize: 17, color: _green),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                  Text(
+                    'المعجم (مفردات الراغب)',
+                    style: GoogleFonts.amiri(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: _green,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    _lexicon ??
+                        'لا يوجد تعريف معجمي لهذه الكلمة في مفردات الراغب.',
+                    style: GoogleFonts.amiri(fontSize: 17),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'الصرف',
+                    style: GoogleFonts.amiri(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: _green,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    _morph ?? 'لا يوجد وصف صرفي لهذه الكلمة في البيانات.',
+                    style: GoogleFonts.amiri(fontSize: 17),
+                  ),
+                ],
+              ),
+            ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------
+// Word settings sheet (gear) + playback settings sheet — v13.6
+// ---------------------------------------------------------------------
+
+/// Choice chips for one setting (repeat count / speed): a Wrap of
+/// ChoiceChips, the selected one filled green.
+Widget _optionChips<T>({
+  required List<(T, String)> options,
+  required T selected,
+  required void Function(T) onSelected,
+}) {
+  return Wrap(
+    spacing: 8,
+    runSpacing: 8,
+    children: [
+      for (final (value, label) in options)
+        ChoiceChip(
+          label: Text(
+            label,
+            style: GoogleFonts.amiri(
+              fontSize: 15,
+              color: value == selected ? Colors.white : null,
+            ),
+          ),
+          selected: value == selected,
+          selectedColor: _green,
+          onSelected: (_) => onSelected(value),
+        ),
+    ],
+  );
+}
+
+/// Repeat-count options, shared by both settings sheets. 0 =
+/// endless (مستمر). Count 1 = play once = repeat off.
+const _repeatOptions = <(int, String)>[
+  (1, 'مرة واحدة'),
+  (3, '٣ مرات'),
+  (5, '٥ مرات'),
+  (10, '١٠ مرات'),
+  (0, 'مستمر'),
+];
+
+/// The gear button's sheet: auto-play the word on tap + the word
+/// repeat count.
+Future<void> showWordSettingsSheet({
+  required BuildContext context,
+  required AudioPlayerController controller,
+}) {
+  return showModalBottomSheet(
+    context: context,
+    backgroundColor: Colors.transparent,
+    builder: (context) => Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).brightness == Brightness.dark
+            ? const Color(0xFF1E1F1E)
+            : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+      child: ListenableBuilder(
+        listenable: controller,
+        builder: (context, _) => Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.withValues(alpha: 0.4),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'إعدادات الكلمة',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.amiri(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            // Own Material: the sheet's DecoratedBox background would
+            // otherwise hide the tile's ink (FlutterError in tests).
+            Material(
+              color: Colors.transparent,
+              child: SwitchListTile(
+                title: Text(
+                  'تشغيل صوت الكلمة تلقائياً عند الضغط عليها',
+                  style: GoogleFonts.amiri(fontSize: 16),
+                ),
+                value: controller.wordAutoPlay,
+                activeThumbColor: _green,
+                onChanged: controller.setWordAutoPlay,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'تكرار الكلمة',
+              style: GoogleFonts.amiri(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: _green,
+              ),
+            ),
+            const SizedBox(height: 8),
+            _optionChips<int>(
+              options: _repeatOptions,
+              selected: controller.repeatCount,
+              onSelected: controller.setRepeatCount,
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+/// The bottom-left gear's sheet: playback speed + the repeat count.
+Future<void> showPlaybackSettingsSheet({
+  required BuildContext context,
+  required AudioPlayerController controller,
+}) {
+  return showModalBottomSheet(
+    context: context,
+    backgroundColor: Colors.transparent,
+    builder: (context) => Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).brightness == Brightness.dark
+            ? const Color(0xFF1E1F1E)
+            : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+      child: ListenableBuilder(
+        listenable: controller,
+        builder: (context, _) => Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.withValues(alpha: 0.4),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'إعدادات التشغيل',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.amiri(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'السرعة',
+              style: GoogleFonts.amiri(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: _green,
+              ),
+            ),
+            const SizedBox(height: 8),
+            _optionChips<double>(
+              options: const [
+                (0.75, 'بطيئة 0.75×'),
+                (1.0, 'عادية 1×'),
+                (1.25, 'سريعة 1.25×'),
+                (1.5, 'سريعة 1.5×'),
+              ],
+              selected: controller.speed,
+              onSelected: (v) => unawaited(controller.setSpeed(v)),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'التكرار',
+              style: GoogleFonts.amiri(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: _green,
+              ),
+            ),
+            const SizedBox(height: 8),
+            _optionChips<int>(
+              options: _repeatOptions,
+              selected: controller.repeatCount,
+              onSelected: controller.setRepeatCount,
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------
+// Reciter picker sheet — v13.6
+// ---------------------------------------------------------------------
+
+/// The reciter pill's sheet: the 15 reciters, the current one
+/// checked; a tap switches the reciter (persisted) and closes.
+/// Downloads live in the reciters screen, not here — this is only
+/// a picker.
+Future<void> showReciterPickerSheet({
+  required BuildContext context,
+  required AudioPlayerController controller,
+}) {
+  return showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (context) => Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.7,
+      ),
+      decoration: BoxDecoration(
+        color: Theme.of(context).brightness == Brightness.dark
+            ? const Color(0xFF1E1F1E)
+            : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+      child: ListenableBuilder(
+        listenable: controller,
+        builder: (context, _) => Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.withValues(alpha: 0.4),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'اختر القارئ',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.amiri(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  for (var i = 0; i < reciters.length; i++)
+                    // Own Material: the sheet's DecoratedBox background
+                    // would otherwise hide the tile's ink (FlutterError
+                    // in tests).
+                    Material(
+                      color: Colors.transparent,
+                      child: ListTile(
+                        title: Text(
+                          reciters[i].name,
+                          style: GoogleFonts.amiri(
+                            fontSize: 17,
+                            fontWeight: i == controller.reciterIndex
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                          ),
+                        ),
+                        trailing: i == controller.reciterIndex
+                            ? const Icon(Icons.check, color: _green)
+                            : null,
+                        onTap: () async {
+                          await controller.setReciter(i);
+                          if (context.mounted) Navigator.of(context).pop();
+                        },
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------
