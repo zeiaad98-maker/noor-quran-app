@@ -339,6 +339,10 @@ void main() {
           break;
         }
       }
+      // The word card is a bottom sheet: its slide-in animation only
+      // advances on pumped fake time (v13.6) — settle it so the bar
+      // is on-screen before tapping.
+      await tester.pumpAndSettle();
     }
 
     testWidgets('the ayah button calls onPlayAyah and closes the card',
@@ -356,9 +360,14 @@ void main() {
                   wordIndex: 7,
                   audioController: AudioPlayerController(),
                   onPlayWord: (_) {},
+                  onRepeatWord: (_) {},
                   onPlayAyah: () => playedAyahs.add((3, 7)),
+                  onContinueFromAyah: () {},
+                  onGoToLastReading: () {},
                   onOpenNotes: () {},
                   onOpenTafsir: () {},
+                  onOpenReciterPicker: () {},
+                  onOpenPlaybackSettings: () {},
                 ),
                 child: const Text('open'),
               ),
@@ -370,10 +379,12 @@ void main() {
       await tester.pump();
       await warmUntilLoaded(tester);
 
-      expect(find.text('استمع للآية'), findsOneWidget,
+      expect(find.text('الآية'), findsOneWidget,
           reason: 'the ayah-listen action is visible from any word tap');
-      await tester.tap(find.text('استمع للآية'));
-      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('playAyahButton')));
+      // The sheet pops with an exit animation — settle it before
+      // asserting it is gone (v13.6: the card is a bottom sheet).
+      await tester.pumpAndSettle();
 
       expect(playedAyahs, [(3, 7)]);
       expect(find.byType(WordCard), findsNothing,

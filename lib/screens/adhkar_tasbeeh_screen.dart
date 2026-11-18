@@ -398,6 +398,18 @@ class _AdhkarReaderScreenState extends State<AdhkarReaderScreen> {
   final Map<int, int> _done = {};
   int _page = 0;
 
+  /// الأذكار التي فتح المستخدم مصدرها/فضلها (مخفية افتراضياً — v13.6).
+  final Set<int> _sourceExpanded = {};
+
+  /// Token يلغي تقدّماً تلقائياً معلّقاً: كل تنقّل يدوي أو تصفير
+  /// يرفعه، فيتجاهل المؤقّت القديم نفسه (لا تقدّم مزدوج — v13.6).
+  int _advanceToken = 0;
+
+  /// ScrollController لكل صفحة ذكر — عند الانتقال لذكر نعيد تمريره
+  /// إلى أول سطر (v13.6: لا يبقى الذكر مقصوصاً من الأعلى بعد
+  /// تمرير سابق).
+  final Map<int, ScrollController> _scrollControllers = {};
+
   bool get _hasIntro => widget.category.intro != null;
   int get _dhikrCount => widget.category.items.length;
   int get _totalPages => _dhikrCount + (_hasIntro ? 1 : 0);
@@ -414,12 +426,17 @@ class _AdhkarReaderScreenState extends State<AdhkarReaderScreen> {
 
   @override
   void dispose() {
+    for (final c in _scrollControllers.values) {
+      c.dispose();
+    }
     _pageController.dispose();
     super.dispose();
   }
 
   void _goToPage(int page) {
     if (page < 0 || page >= _totalPages) return;
+    // تنقّل يدوي — يلغي أي تقدّم تلقائي معلّق.
+    _advanceToken++;
     _pageController.animateToPage(
       page,
       duration: const Duration(milliseconds: 300),
@@ -431,13 +448,36 @@ class _AdhkarReaderScreenState extends State<AdhkarReaderScreen> {
     final di = _dhikrIndexForPage(_page);
     if (di == null) return;
     final item = widget.category.items[di];
+    final wasCompleted = (_done[di] ?? 0) >= item.count;
     setState(() {
       final done = _done[di] ?? 0;
       _done[di] = done < item.count ? done + 1 : 0;
     });
+    // تقدّم تلقائي (v13.6): إذا اكتمل العدّ، انتقل للذكر التالي
+    // بعد ثانية واحدة — يبقى العدّ المكتمل ظاهراً قليلاً. على آخر
+    // ذكر لا تقدّم (تظهر رسالة الإتمام بدلاً منه). المؤقّت يتحقق
+    // من الـ token والصفحة والإكمال، فلا يقدّم مرتين ولا بعد
+    // تنقّل يدوي أو تصفير أو إعادة العدّ.
+    final justCompleted = (_done[di] ?? 0) >= item.count;
+    if (!justCompleted || wasCompleted) return;
+    final token = ++_advanceToken;
+    final page = _page;
+    Future<void>.delayed(const Duration(seconds: 1), () {
+      if (!mounted) return;
+      if (token != _advanceToken) return;
+      if (_page != page) return;
+      final d = _dhikrIndexForPage(_page);
+      if (d == null) return;
+      if ((_done[d] ?? 0) < widget.category.items[d].count) return;
+      if (_page < _totalPages - 1) _goToPage(_page + 1);
+    });
   }
 
-  void _resetAll() => setState(() => _done.clear());
+  void _resetAll() {
+    // التصفير يلغي أي تقدّم تلقائي معلّق.
+    _advanceToken++;
+    setState(() => _done.clear());
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -454,7 +494,15 @@ class _AdhkarReaderScreenState extends State<AdhkarReaderScreen> {
               child: PageView.builder(
                 controller: _pageController,
                 itemCount: _totalPages,
-                onPageChanged: (p) => setState(() => _page = p),
+                onPageChanged: (p) {
+                  setState(() => _page = p);
+                  // تنقّل (يدوي أو تلقائي) — يلغي أي تقدّم معلّق،
+                  // ويعيد الذكر الجديد إلى أول سطر (v13.6).
+                  _advanceToken++;
+                  final d = _dhikrIndexForPage(p);
+                  final c = d == null ? null : _scrollControllers[d];
+                  if (c != null && c.hasClients) c.jumpTo(0);
+                },
                 itemBuilder: (context, page) {
                   final d = _dhikrIndexForPage(page);
                   if (d == null) return _introPage(cat, isDark);
@@ -554,7 +602,12 @@ class _AdhkarReaderScreenState extends State<AdhkarReaderScreen> {
   Widget _dhikrPage(DhikrItem item, int index, bool isDark) {
     final done = _done[index] ?? 0;
     final completed = done >= item.count;
+    final isLast = index == widget.category.items.length - 1;
+    final sourceOpen = _sourceExpanded.contains(index);
+    final scrollController =
+        _scrollControllers.putIfAbsent(index, () => ScrollController());
     return SingleChildScrollView(
+      controller: scrollController,
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
       child: Column(
         children: [
@@ -585,16 +638,50 @@ class _AdhkarReaderScreenState extends State<AdhkarReaderScreen> {
                   ),
                   const SizedBox(height: 12),
                   _goldDivider(),
-                  const SizedBox(height: 12),
-                  Text(
-                    item.source,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 13,
-                      height: 1.7,
-                      color: isDark ? Colors.white60 : Colors.black54,
+                  const SizedBox(height: 4),
+                  // المصدر والفضل مخفيان افتراضياً (v13.6): زر
+                  // يظهرهما عند الضغط ويخفيهما عند الضغط مجدداً،
+                  // في مكان النص نفسه داخل الإطار الذهبي — إخفاؤهما
+                  // يقصّر الصفحة فلا يضطر المستخدم للتمرير ليصل
+                  // إلى دائرة العدّ (وهو ما كان يقصّ أول الذكر).
+                  TextButton.icon(
+                    key: ValueKey('sourceToggleButton_$index'),
+                    onPressed: () => setState(() {
+                      if (sourceOpen) {
+                        _sourceExpanded.remove(index);
+                      } else {
+                        _sourceExpanded.add(index);
+                      }
+                    }),
+                    icon: Icon(
+                      sourceOpen
+                          ? Icons.keyboard_arrow_up
+                          : Icons.keyboard_arrow_down,
+                      color: _gold,
+                      size: 18,
+                    ),
+                    label: Text(
+                      'المصدر والفضل',
+                      style: GoogleFonts.amiri(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: _gold,
+                      ),
                     ),
                   ),
+                  if (sourceOpen) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      item.source,
+                      key: ValueKey('sourceText_$index'),
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 13,
+                        height: 1.7,
+                        color: isDark ? Colors.white60 : Colors.black54,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -629,7 +716,13 @@ class _AdhkarReaderScreenState extends State<AdhkarReaderScreen> {
           ),
           const SizedBox(height: 10),
           Text(
-            completed ? 'تم ✓ — اضغط للبدء من جديد' : 'اضغط على الذكر للعدّ',
+            // آخر ذكر مكتمل: رسالة إتمام الباب كله بدلاً من التقدّم
+            // (لا تقدّم بعد الأخير — v13.6).
+            completed
+                ? (isLast
+                    ? 'تمت ${widget.category.title} ✓ — بارك الله فيك'
+                    : 'تم ✓ — سأنتقل للذكر التالي')
+                : 'اضغط على الذكر للعدّ',
             style: TextStyle(
               fontSize: 14,
               color: isDark ? Colors.white60 : Colors.black54,

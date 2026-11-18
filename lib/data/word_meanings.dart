@@ -5,6 +5,9 @@ import 'package:quran/quran.dart' as quran;
 
 /// Offline Quran word data (Quranpedia dumps, bundled under assets/quran_data):
 /// - word meanings (غريب القرآن — السراج في بيان غريب القرآن، مع التبيان كبديل)
+/// - short in-ayah glosses (مخلوف «كلمات القرآن: تفسير وبيان»، v13.6,
+///   FIRST meaning source) + small additions condensed from التفسير
+///   الميسر where مخلوف has none (e.g. 4:4 فَكُلُوهُ = «فخذوه حلالاً.»)
 /// - word lexicon (مفردات ألفاظ القرآن للراغب الأصفهاني، ت ٥٠٢هـ،
 ///   keyed by normalized root; consulted after غريب القرآن)
 /// - التفسير الميسر (كاملاً، آية بآية)
@@ -14,6 +17,8 @@ import 'package:quran/quran.dart' as quran;
 /// All files are loaded lazily on first use and cached in memory.
 class QuranWordData {
   static Map<String, dynamic>? _meanings;
+  static Map<String, dynamic>? _makhloof;
+  static Map<String, dynamic>? _additions;
   static Map<String, dynamic>? _lexicon;
   static Map<String, dynamic>? _tafsir;
   static Map<String, dynamic>? _morphology;
@@ -42,6 +47,22 @@ class QuranWordData {
     _loading = true;
     final meaningsRaw =
         await rootBundle.loadString('assets/quran_data/word_meanings.json');
+    // مخلوف short glosses + additions are optional like the lexicon:
+    // a missing/corrupt file must not break the rest of the word data.
+    try {
+      final makhRaw = await rootBundle
+          .loadString('assets/quran_data/word_glosses_makhloof.json');
+      _makhloof = jsonDecode(makhRaw) as Map<String, dynamic>;
+    } catch (_) {
+      _makhloof = <String, dynamic>{};
+    }
+    try {
+      final addRaw = await rootBundle
+          .loadString('assets/quran_data/word_gloss_additions.json');
+      _additions = jsonDecode(addRaw) as Map<String, dynamic>;
+    } catch (_) {
+      _additions = <String, dynamic>{};
+    }
     // The lexicon is optional: a missing/corrupt file must not break
     // the rest of the word data (meanings, tafsir, morphology).
     try {
@@ -132,15 +153,48 @@ class QuranWordData {
         .toList(growable: false);
   }
 
+  static List<(String, String)> _entriesFrom(
+      Map<String, dynamic>? data, int surah, int verse) {
+    final raw = data?[_key(surah, verse)];
+    if (raw == null) return <(String, String)>[];
+    return (raw as List<dynamic>)
+        .map((e) => (e[0] as String, e[1] as String))
+        .toList(growable: false);
+  }
+
+  /// مخلوف short in-ayah glosses for an ayah (v13.6), or empty list.
+  static Future<List<(String, String)>> makhloofEntriesForAyah(
+      int surah, int verse) async {
+    await ensureLoaded();
+    return _entriesFrom(_makhloof, surah, verse);
+  }
+
+  /// Additions (short glosses condensed from التفسير الميسر where
+  /// مخلوف has none) for an ayah, or empty list.
+  static Future<List<(String, String)>> additionEntriesForAyah(
+      int surah, int verse) async {
+    await ensureLoaded();
+    return _entriesFrom(_additions, surah, verse);
+  }
+
   /// Meaning of one tapped word, matched by normalized form.
-  /// غريب القرآن entries come first (ayah-specific); when the word has
-  /// no special meaning there, the root lexicon (مفردات الراغب) is
-  /// consulted. v13.2: the returned text is [shortenGloss]-shortened,
-  /// so the word card AND the meaning sheet both show the short plain
-  /// gloss (the user: "اختصر وهيك بس يكون مفهوم المعنى").
-  /// Returns null only when neither source has anything.
+  /// Priority (v13.6, the user's pick — "ضيف المعاني القصيرة متل وحي
+  /// أول"): additions first, then مخلوف, then غريب القرآن, then the
+  /// root lexicon (مفردات الراغب). The مخلوف / additions glosses are
+  /// short in-ayah explanations (Wahy-style); the غريب and Raghib
+  /// entries are consulted only when neither has the word. v13.2: the
+  /// returned text is [shortenGloss]-shortened, so the word card AND
+  /// the meaning sheet both show the short plain gloss (the user:
+  /// "اختصر وهيك بس يكون مفهوم المعنى").
+  /// Returns null only when no source has anything.
   static Future<String?> meaningForWord(
       int surah, int verse, String word) async {
+    final additionEntries = await additionEntriesForAyah(surah, verse);
+    final addition = _matchWordStrict(additionEntries, word);
+    if (addition != null) return shortenGloss(addition);
+    final makhloofEntries = await makhloofEntriesForAyah(surah, verse);
+    final makhloof = _matchWordStrict(makhloofEntries, word);
+    if (makhloof != null) return shortenGloss(makhloof);
     final entries = await meaningsForAyah(surah, verse);
     final gharib = _matchWord(entries, word);
     if (gharib != null) return shortenGloss(gharib);
@@ -288,18 +342,35 @@ class QuranWordData {
     var withShortMeaning = 0;
     for (final ayah in _morphology!.entries) {
       final key = ayah.key;
+      final parts = key.split(':');
+      final surah = int.parse(parts[0]);
+      final verse = int.parse(parts[1]);
       final rawMeanings = _meanings![key];
       final meaningEntries = rawMeanings == null
           ? <(String, String)>[]
           : (rawMeanings as List<dynamic>)
               .map((e) => (e[0] as String, e[1] as String))
               .toList(growable: false);
+      final additionEntries = _entriesFrom(_additions, surah, verse);
+      final makhloofEntries = _entriesFrom(_makhloof, surah, verse);
       for (final w in ayah.value as List<dynamic>) {
         final word = w[0] as String;
         final desc = w.length >= 2 ? w[1] as String : '';
         String gloss;
-        final gharib = _matchWord(meaningEntries, word);
-        if (gharib != null) {
+        // v13.6 priority: additions → مخلوف → غريب → Raghib.
+        final addition = _matchWordStrict(additionEntries, word);
+        final makhloof =
+            addition == null ? _matchWordStrict(makhloofEntries, word) : null;
+        final gharib = makhloof == null && addition == null
+            ? _matchWord(meaningEntries, word)
+            : null;
+        if (addition != null) {
+          gloss = shortenGloss(addition);
+          withShortMeaning++;
+        } else if (makhloof != null) {
+          gloss = shortenGloss(makhloof);
+          withShortMeaning++;
+        } else if (gharib != null) {
           gloss = shortenGloss(gharib);
           withShortMeaning++;
         } else {
@@ -417,11 +488,17 @@ class QuranWordData {
   }
 
   /// Which source [wordGloss] draws on for this word, so the UI can
-  /// label it honestly: 'gharib' (غريب القرآن), 'lexicon'
-  /// (مفردات الراغب، مادة الجذر), 'morph' (الوصف الصرفي فقط),
-  /// or 'none' (word not found in any bundled source).
+  /// label it honestly: 'addition' (short gloss condensed from
+  /// التفسير الميسر), 'makhloof' (مخلوف «كلمات القرآن»), 'gharib'
+  /// (غريب القرآن), 'lexicon' (مفردات الراغب، مادة الجذر), 'morph'
+  /// (الوصف الصرفي فقط), or 'none' (word not found in any bundled
+  /// source).
   static Future<String> glossSourceForWord(
       int surah, int verse, String word) async {
+    final additionEntries = await additionEntriesForAyah(surah, verse);
+    if (_matchWordStrict(additionEntries, word) != null) return 'addition';
+    final makhloofEntries = await makhloofEntriesForAyah(surah, verse);
+    if (_matchWordStrict(makhloofEntries, word) != null) return 'makhloof';
     final entries = await meaningsForAyah(surah, verse);
     if (_matchWord(entries, word) != null) return 'gharib';
     if (await lexiconForWord(surah, verse, word) != null) return 'lexicon';
@@ -430,13 +507,19 @@ class QuranWordData {
   }
 
   /// Coverage of the bundled word data over the whole Mushaf, measured
-  /// with the app's own matching logic ([_matchWord] + root lookup):
-  /// total words, words with a غريب القرآن meaning, words with a
-  /// root-lexicon definition, words with either meaning, and words
-  /// with any non-blank gloss (meaning or morphology description).
+  /// with the app's own matching logic (strict for مخلوف / additions,
+  /// [_matchWord] + root lookup for the rest): total words, words with
+  /// a مخلوف gloss, words with an additions gloss, words with a غريب
+  /// القرآن meaning, words with a root-lexicon definition, words with
+  /// either meaning, and words with any non-blank gloss (meaning or
+  /// morphology description). The per-source counts are independent
+  /// (a word can match several sources); [withMeaning] is the union
+  /// in priority order (additions → مخلوف → غريب → lexicon).
   static Future<
       ({
         int total,
+        int withMakhloof,
+        int withAddition,
         int withGharib,
         int withLexicon,
         int withMeaning,
@@ -444,32 +527,55 @@ class QuranWordData {
       })> coverageStats() async {
     await ensureLoaded();
     var total = 0;
+    var withMakhloof = 0;
+    var withAddition = 0;
     var withGharib = 0;
     var withLexicon = 0;
     var withMeaning = 0;
     var withGloss = 0;
     for (final ayah in _morphology!.entries) {
       final key = ayah.key;
+      final parts = key.split(':');
+      final surah = int.parse(parts[0]);
+      final verse = int.parse(parts[1]);
       final rawMeanings = _meanings![key];
       final meaningEntries = rawMeanings == null
           ? <(String, String)>[]
           : (rawMeanings as List<dynamic>)
               .map((e) => (e[0] as String, e[1] as String))
               .toList(growable: false);
+      final additionEntries = _entriesFrom(_additions, surah, verse);
+      final makhloofEntries = _entriesFrom(_makhloof, surah, verse);
       for (final w in ayah.value as List<dynamic>) {
         final word = w[0] as String;
         final desc = w.length >= 2 ? w[1] as String : '';
         total++;
+        final hasAddition =
+            _matchWordStrict(additionEntries, word) != null;
+        final hasMakhloof =
+            _matchWordStrict(makhloofEntries, word) != null;
         final hasGharib = _matchWord(meaningEntries, word) != null;
         final hasLexicon = _lexiconLookup(desc) != null;
+        if (hasAddition) withAddition++;
+        if (hasMakhloof) withMakhloof++;
         if (hasGharib) withGharib++;
         if (hasLexicon) withLexicon++;
-        if (hasGharib || hasLexicon) withMeaning++;
-        if (hasGharib || hasLexicon || desc.isNotEmpty) withGloss++;
+        if (hasAddition || hasMakhloof || hasGharib || hasLexicon) {
+          withMeaning++;
+        }
+        if (hasAddition ||
+            hasMakhloof ||
+            hasGharib ||
+            hasLexicon ||
+            desc.isNotEmpty) {
+          withGloss++;
+        }
       }
     }
     return (
       total: total,
+      withMakhloof: withMakhloof,
+      withAddition: withAddition,
       withGharib: withGharib,
       withLexicon: withLexicon,
       withMeaning: withMeaning,
@@ -488,6 +594,32 @@ class QuranWordData {
         .map((e) => (e[0] as String, e[1] as String))
         .toList(growable: false);
     return _matchWord(entries, word);
+  }
+
+  /// Strict word match for the مخلوف / additions sources: exact
+  /// normalized match, then token-in-phrase. The third step of
+  /// [_matchWord] (containment) is NOT used here: a short particle
+  /// (على، إلا، لكم، إلى) is a substring of many unrelated phrases, so
+  /// containment returns the phrase's gloss for a word it does not
+  /// explain (verified: 157 containment-only مخلوف matches, ~8/10
+  /// wrong — e.g. 4:141 عَلَى getting the gloss of «أَلَمْ
+  /// نَسْتَحْوِذْ عَلَيْكُمْ»). Those words fall through to غريب /
+  /// Raghib / the morphology description instead. The غريب and
+  /// morphology lookups keep [_matchWord] (containment included) —
+  /// their behaviour is unchanged.
+  static String? _matchWordStrict(
+      List<(String, String)> entries, String word) {
+    final wordNorm = normalizeArabic(word);
+    if (wordNorm.isEmpty) return null;
+    for (final (text, value) in entries) {
+      if (normalizeArabic(text) == wordNorm) return value;
+    }
+    for (final (text, value) in entries) {
+      for (final token in text.split(RegExp(r'\s+'))) {
+        if (normalizeArabic(token) == wordNorm) return value;
+      }
+    }
+    return null;
   }
 
   static String? _matchWord(List<(String, String)> entries, String word) {

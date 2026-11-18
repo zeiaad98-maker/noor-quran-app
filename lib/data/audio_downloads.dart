@@ -464,14 +464,14 @@ class AudioDownloadService extends ChangeNotifier {
   /// its number, so a file cached under the old (shifted) number
   /// is still the right recording for the word that now asks for
   /// that number. No purge needed.
-  /// Tries the current CDN first, then the legacy host (v13.2),
-  /// then SurahPedia (v13.5 — a different host, so it can work
-  /// when the Quran.com hosts are unreachable from the user's
-  /// network). Each host is fetched by [_fetchToFile] (streamed,
-  /// stall timeout only, resume + retry — v13.3): a slow connection
-  /// still gets the file, it just takes longer; there is no "too
-  /// slow" any more. Returns the file, or null when all three hosts
-  /// fail (the player then reports the error). Never throws.
+  /// Tries the hosts in [wbwWordUrlsInOrder] — SurahPedia FIRST
+  /// since v13.6 (Wahy's host, the one that opens from the user's
+  /// network), then the Quran.com CDN, then the legacy host. Each
+  /// host is fetched by [_fetchToFile] (streamed, stall timeout
+  /// only, resume + retry — v13.3): a slow connection still gets
+  /// the file, it just takes longer; there is no "too slow" any
+  /// more. Returns the file, or null when all three hosts fail
+  /// (the player then reports the error). Never throws.
   Future<File?> cacheWbwFile(
     int surah,
     int ayah,
@@ -485,19 +485,11 @@ class AudioDownloadService extends ChangeNotifier {
     if (dir == null) return null;
     final file = File('${dir.path}/wbw/${ayahFileName(surah, ayah)}_'
         '${fileNumber.toString().padLeft(3, '0')}.mp3');
-    if (await _fetchToFile(wbwWordUrl(surah, ayah, fileNumber), file,
-        onProgress: onProgress, isCancelled: isCancelled)) {
-      return localWbwFile(surah, ayah, fileNumber);
-    }
-    if (await _fetchToFile(
-        wbwWordUrlLegacy(surah, ayah, fileNumber), file,
-        onProgress: onProgress, isCancelled: isCancelled)) {
-      return localWbwFile(surah, ayah, fileNumber);
-    }
-    if (await _fetchToFile(
-        wbwWordUrlSurahPedia(surah, ayah, fileNumber), file,
-        onProgress: onProgress, isCancelled: isCancelled)) {
-      return localWbwFile(surah, ayah, fileNumber);
+    for (final url in wbwWordUrlsInOrder(surah, ayah, fileNumber)) {
+      if (await _fetchToFile(url, file,
+          onProgress: onProgress, isCancelled: isCancelled)) {
+        return localWbwFile(surah, ayah, fileNumber);
+      }
     }
     return null;
   }

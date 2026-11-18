@@ -181,18 +181,18 @@ String? quranComAyahUrl(Reciter reciter, int surah, int ayah) {
 /// do NOT count as positions, whatever the Quran.com API's
 /// audio_url field says (it counts them — proven by transcription
 /// 2026-11-17: 3:7 word 15 الَّذِينَ is file 015, the API claims
-/// 016, and 016 speaks فِي). Primary host is Quran.com's current
-/// CDN (audio.qurancdn.com, per api-docs); [wbwWordUrlLegacy] is
-/// the old host and [wbwWordUrlSurahPedia] the SurahPedia host,
-/// tried only if the earlier ones fail.
+/// 016, and 016 speaks فِي). The hosts are tried in
+/// [wbwWordUrlsInOrder] (SurahPedia first since v13.6); the
+/// individual builders below are the pieces of that order.
 String wbwWordUrl(int surah, int ayah, int fileNumber) =>
     'https://audio.qurancdn.com/wbw/'
     '${surah.toString().padLeft(3, '0')}_'
     '${ayah.toString().padLeft(3, '0')}_'
     '${fileNumber.toString().padLeft(3, '0')}.mp3';
 
-/// Legacy host for the wbw recording (verses.quran.com) — fallback
-/// only, when audio.qurancdn.com fails.
+/// Legacy host for the wbw recording (verses.quran.com) — third
+/// attempt in [wbwWordUrlsInOrder], when SurahPedia and the current
+/// CDN both fail.
 String wbwWordUrlLegacy(int surah, int ayah, int fileNumber) =>
     'https://verses.quran.com/wbw/'
     '${surah.toString().padLeft(3, '0')}_'
@@ -200,14 +200,15 @@ String wbwWordUrlLegacy(int surah, int ayah, int fileNumber) =>
     '${fileNumber.toString().padLeft(3, '0')}.mp3';
 
 /// SurahPedia host for the wbw recording
-/// (resources.surahpedia.com) — third attempt, after the Quran.com
-/// CDN and the legacy host (v13.5). A different host, so it can
-/// work when the Quran.com hosts are unreachable from the user's
-/// network (the user's 'no internet' on a strong connection).
-/// Verified 2026-11-17 by decompiling Wahy 1.4.9: Wahy's
-/// soundOfWord_v2 endpoint 302-redirects to these files, which are
-/// BYTE-IDENTICAL to the Quran.com wbw files (MD5-verified — e.g.
-/// 003007015 = 16c7e66e1d61d479b544133af3bf0bb2 on both hosts).
+/// (resources.surahpedia.com) — FIRST attempt since v13.6 (Wahy's
+/// host, proven reachable from the user's Syrian network while the
+/// Quran.com hosts are not). A different host, so it can work when
+/// the Quran.com hosts are unreachable from the user's network (the
+/// user's 'no internet' on a strong connection). Verified 2026-11-17
+/// by decompiling Wahy 1.4.9: Wahy's soundOfWord_v2 endpoint
+/// 302-redirects to these files, which are BYTE-IDENTICAL to the
+/// Quran.com wbw files (MD5-verified — e.g. 003007015 =
+/// 16c7e66e1d61d479b544133af3bf0bb2 on both hosts).
 /// Note the pattern: slash-separated
 /// Word_by-Word/{surah}/{SSSAAAWWW}.mp3, no underscores — the
 /// surah folder is unpadded, the file name is the three 3-digit
@@ -218,6 +219,20 @@ String wbwWordUrlSurahPedia(int surah, int ayah, int fileNumber) =>
     '${surah.toString().padLeft(3, '0')}'
     '${ayah.toString().padLeft(3, '0')}'
     '${fileNumber.toString().padLeft(3, '0')}.mp3';
+
+/// The wbw hosts in the order a word file is attempted (v13.6):
+/// SurahPedia FIRST (Wahy's host — the one that opens from the
+/// user's network), then the Quran.com CDN, then the legacy host.
+/// One list, used by BOTH the cache path ([AudioDownloadService.
+/// cacheWbwFile]) and the streaming path ([AudioPlayerController.
+/// _playWbwWord]) so the two can never drift apart again — the
+/// v13.5 screenshot showed the word stuck loading because the
+/// blocked hosts were tried first and the working one last.
+List<String> wbwWordUrlsInOrder(int surah, int ayah, int fileNumber) => [
+      wbwWordUrlSurahPedia(surah, ayah, fileNumber),
+      wbwWordUrl(surah, ayah, fileNumber),
+      wbwWordUrlLegacy(surah, ayah, fileNumber),
+    ];
 
 /// v13.4 — the wbw shift table is DELETED, on purpose. It encoded
 /// the Quran.com API's audio_url numbering, which counts pause

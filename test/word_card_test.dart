@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:quran/quran.dart' as quran;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -25,6 +26,11 @@ import 'package:noor_quran/widgets/word_card.dart';
 /// device/platform channel. Everything around it is pinned.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  // The Amiri font is fetched at runtime in the app; in tests there
+  // is no font-server guarantee — a failed fetch surfaces as a test
+  // exception in whichever test runs next (flaky). Never hit the
+  // network here; the fallback font is fine for layout assertions.
+  GoogleFonts.config.allowRuntimeFetching = false;
 
   /// 411dp logical width, the user's phone.
   void set411(WidgetTester tester) {
@@ -114,12 +120,36 @@ void main() {
     });
   });
 
-  group('word card at 411dp (Aal-Imran 3:7, word 8 مُّحْكَمَاتٌ)', () {
+  group('word card at 411dp — Wahy style (v13.6)', () {
     late List<int> playedWords;
+    late List<int> repeatedWords;
+    late List<(int, int)> playedAyahs;
+    late List<(int, int)> continuedAyahs;
+    late int lastReadingTaps;
+    late int notesTaps;
+    late int tafsirTaps;
+    late int reciterPickerTaps;
+    late int playbackSettingsTaps;
 
-    Future<void> openCard(WidgetTester tester) async {
+    setUp(() {
       playedWords = <int>[];
-      // The card loads bookmark/highlight/note marks from prefs.
+      repeatedWords = <int>[];
+      playedAyahs = <(int, int)>[];
+      continuedAyahs = <(int, int)>[];
+      lastReadingTaps = 0;
+      notesTaps = 0;
+      tafsirTaps = 0;
+      reciterPickerTaps = 0;
+      playbackSettingsTaps = 0;
+    });
+
+    Future<void> openCard(
+      WidgetTester tester, {
+      int surah = 3,
+      int verse = 7,
+      int wordIndex = 7,
+    }) async {
+      // The card loads bookmark/note marks from prefs.
       SharedPreferences.setMockInitialValues({});
       await tester.pumpWidget(
         MaterialApp(
@@ -128,14 +158,20 @@ void main() {
               builder: (context) => ElevatedButton(
                 onPressed: () => showWordCard(
                   context: context,
-                  surah: 3,
-                  verse: 7,
-                  wordIndex: 7,
+                  surah: surah,
+                  verse: verse,
+                  wordIndex: wordIndex,
                   audioController: AudioPlayerController(),
                   onPlayWord: playedWords.add,
-                  onPlayAyah: () {},
-                  onOpenNotes: () {},
-                  onOpenTafsir: () {},
+                  onRepeatWord: repeatedWords.add,
+                  onPlayAyah: () => playedAyahs.add((surah, verse)),
+                  onContinueFromAyah: () =>
+                      continuedAyahs.add((surah, verse)),
+                  onGoToLastReading: () => lastReadingTaps++,
+                  onOpenNotes: () => notesTaps++,
+                  onOpenTafsir: () => tafsirTaps++,
+                  onOpenReciterPicker: () => reciterPickerTaps++,
+                  onOpenPlaybackSettings: () => playbackSettingsTaps++,
                 ),
                 child: const Text('open'),
               ),
@@ -148,54 +184,86 @@ void main() {
       await warmUntilLoaded(tester);
     }
 
-    testWidgets('small card: word + meaning, fits 411dp, Arabic counter',
+    testWidgets('Wahy layout: ayah header (blue word) + 4 tabs + buttons',
         (tester) async {
       set411(tester);
       await openCard(tester);
 
-      // The card itself sits fully inside the screen.
       expectFullyVisible(tester, find.byType(WordCard));
-      // Word big in green + its real bundled meaning right under it.
-      // (The displayed word is the QCF spelling from the page:
-      // dagger alef ٰ and ۡ — the same glyphs the Mushaf shows.)
-      expect(find.text('مُّحۡكَمَٰتٌ'), findsOneWidget);
-      expect(find.textContaining('وَاضِحَاتُ'), findsOneWidget);
-      // NO tabs, NO full ayah under the word.
-      expect(find.text('الكلمة'), findsNothing);
-      expect(find.text('الآية'), findsNothing);
-      expect(find.text('علوم السورة'), findsNothing);
-      expect(find.text(quran.getVerse(3, 7)), findsNothing);
-      // Toolbar (v13.3, SurahApp-style): the five actions; صرف/إعراب
-      // live inside المزيد, NOT on the bar itself.
-      for (final label in ['استمع', 'فاصل', 'تلوين', 'تعليقات', 'المزيد']) {
-        expectFullyVisible(tester, find.text(label));
+      // Ayah header: the whole 3:7, the tapped word in blue. (The
+      // header also holds the medallion's own RichText, so match the
+      // ayah RichText by its content, not by type alone; compare
+      // normalized — the header's QCF spelling and the reader's word
+      // can differ in diacritic order.)
+      final headerRich = find.descendant(
+        of: find.byKey(const ValueKey('ayahHeader')),
+        matching: find.byWidgetPredicate(
+          (w) =>
+              w is RichText &&
+              w.text is TextSpan &&
+              (w.text as TextSpan).children?.any((s) =>
+                      s is TextSpan &&
+                      s.text != null &&
+                      QuranWordData.normalizeArabic(s.text!) ==
+                          QuranWordData.normalizeArabic('مُّحۡكَمَٰتٌ') &&
+                      s.style?.color == const Color(0xFF2E7FD1)) ==
+                  true,
+        ),
+      );
+      expect(headerRich, findsOneWidget);
+      // The verse-number medallion (٧) — the header's only Text.
+      final medallion = tester.widget<Text>(find.descendant(
+        of: find.byKey(const ValueKey('ayahHeader')),
+        matching: find.byType(Text),
+      ));
+      expect(medallion.data, '٧');
+      // Meaning visible at once (v13.5 bug: it hid behind the audio
+      // spinner) — the مخلوف gloss for «آيَاتٌ مُّحْكَمَاتٌ».
+      expect(find.textContaining('واضحات لا احتمال فيها ولا اشباه'),
+          findsOneWidget);
+      // The 4 tabs.
+      for (final label in ['المعنى', 'التصريف', 'الإعراب', 'القراءات']) {
+        expect(find.text(label), findsOneWidget);
       }
-      expect(find.text('صرف'), findsNothing);
-      expect(find.text('إعراب'), findsNothing);
-      // Counter (Arabic-Indic digits, never "8 / 46").
-      expect(find.text('الكلمة ٨ من ٤٦'), findsOneWidget);
-      expect(find.textContaining(' / '), findsNothing);
+      // Right column + rows below: every button present.
+      for (final key in [
+        'playWordButton',
+        'repeatWordButton',
+        'wordDetailsButton',
+        'wordSettingsButton',
+        'bookmarkButton',
+        'lastReadingButton',
+        'notesButton',
+        'tafsirButton',
+        'playAyahButton',
+        'continueButton',
+        'reciterButton',
+        'playbackSettingsButton',
+      ]) {
+        expect(find.byKey(ValueKey(key)), findsOneWidget);
+      }
+      // Reciter pill shows the current reciter (default الحصري here).
+      expect(find.text('محمود الحصري'), findsOneWidget);
+      // NO old layout: no toolbar labels, no counter, no mode pill.
+      for (final label in ['استمع', 'فاصل', 'تلوين', 'تعليقات', 'المزيد']) {
+        expect(find.text(label), findsNothing);
+      }
+      expect(find.textContaining('الكلمة ٨ من'), findsNothing);
+      expect(find.byKey(const ValueKey('modePill')), findsNothing);
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('المزيد → صرف shows the parsed fields, إعراب the morph text',
-        (tester) async {
+    testWidgets('tabs switch: التصريف fields, الإعراب morph + note, '
+        'القراءات honest empty for 3:7', (tester) async {
       set411(tester);
       await openCard(tester);
 
-      await tester.tap(find.text('المزيد'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('صرف'));
+      await tester.tap(find.byKey(const ValueKey('tabSarf')));
       await tester.pump();
       expect(find.text('حكم'), findsOneWidget);
-      // The singular row shows مُحْكَمَة (diacritic order follows
-      // the QCF word, so match on the stable substring).
-      expect(find.textContaining('حْكَمَة'), findsOneWidget);
       expect(find.textContaining('جمع مؤنث سالم'), findsOneWidget);
 
-      await tester.tap(find.text('المزيد'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('إعراب'));
+      await tester.tap(find.byKey(const ValueKey('tabIrab')));
       await tester.pump();
       expect(
         find.text(
@@ -204,36 +272,121 @@ void main() {
       );
       expect(find.textContaining('الإعراب هنا مبسّط'), findsOneWidget);
 
-      // The pill returns to المعنى.
-      await tester.tap(find.byKey(const ValueKey('modePill')));
+      // 3:7 has no qiraat variant in the bundled data — the tab says
+      // so honestly instead of inventing one.
+      await tester.tap(find.byKey(const ValueKey('tabQiraat')));
       await tester.pump();
-      expect(find.textContaining('وَاضِحَاتُ'), findsOneWidget);
+      expect(find.textContaining('لا توجد قراءات مختلفة لهذه الآية'),
+          findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('tabMeaning')));
+      await tester.pump();
+      expect(find.textContaining('واضحات لا احتمال فيها ولا اشباه'),
+          findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('استمع plays the word and closes the card',
+    testWidgets('القراءات tab: 1:4 shows مَالِكِ / مَلِكِ with readers',
+        (tester) async {
+      set411(tester);
+      await openCard(tester, surah: 1, verse: 4, wordIndex: 0);
+
+      await tester.tap(find.byKey(const ValueKey('tabQiraat')));
+      await tester.pump();
+      expect(find.textContaining('مَالِكِ'), findsOneWidget);
+      expect(find.textContaining('مَلِكِ'), findsOneWidget);
+      expect(find.textContaining('قراءة المصحف'), findsOneWidget);
+      expect(find.textContaining('ابن عامر'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('every button calls its function (no dead buttons)',
         (tester) async {
       set411(tester);
       await openCard(tester);
 
-      await tester.tap(find.text('استمع'));
-      await tester.pumpAndSettle();
+      // Green ▶ plays the word and keeps the card open.
+      await tester.tap(find.byKey(const ValueKey('playWordButton')));
+      await tester.pump();
       expect(playedWords, [7]);
-      expect(find.byType(WordCard), findsNothing);
-      expect(tester.takeException(), isNull);
-    });
+      expect(find.byType(WordCard), findsOneWidget);
 
-    testWidgets('prev/next move within the ayah and update the counter',
-        (tester) async {
-      set411(tester);
-      await openCard(tester);
+      // Circled ▶ repeats the word.
+      await tester.tap(find.byKey(const ValueKey('repeatWordButton')));
+      await tester.pump();
+      expect(repeatedWords, [7]);
 
-      await tester.tap(find.byTooltip('الكلمة التالية'));
-      await warmUntilLoaded(tester);
-      expect(find.text('الكلمة ٩ من ٤٦'), findsOneWidget);
-      await tester.tap(find.byTooltip('الكلمة السابقة'));
-      await warmUntilLoaded(tester);
-      expect(find.text('الكلمة ٨ من ٤٦'), findsOneWidget);
+      // Magnifier opens the word-details sheet; a tap above the
+      // sheet dismisses it.
+      await tester.tap(find.byKey(const ValueKey('wordDetailsButton')));
+      await tester.pumpAndSettle();
+      expect(find.text('المعجم (مفردات الراغب)'), findsOneWidget);
+      await tester.tapAt(const Offset(200, 50));
+      await tester.pumpAndSettle();
+      expect(find.text('المعجم (مفردات الراغب)'), findsNothing);
+      expect(find.byType(WordCard), findsOneWidget);
+
+      // Gear opens the word-settings sheet.
+      await tester.tap(find.byKey(const ValueKey('wordSettingsButton')));
+      await tester.pumpAndSettle();
+      expect(find.text('إعدادات الكلمة'), findsOneWidget);
+      expect(find.text('تشغيل صوت الكلمة تلقائياً عند الضغط عليها'),
+          findsOneWidget);
+      await tester.tapAt(const Offset(200, 50));
+      await tester.pumpAndSettle();
+      expect(find.byType(WordCard), findsOneWidget);
+
+      // Bookmark toggles (the ayah was not bookmarked).
+      await tester.tap(find.byKey(const ValueKey('bookmarkButton')));
+      await tester.pump();
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('bookmarkButton')),
+          matching: find.byIcon(Icons.bookmark),
+        ),
+        findsOneWidget,
+      );
+
+      // The closing buttons each fire their callback and close the
+      // card. The card is already open after the bookmark tap, so
+      // the first closer taps it directly; later ones reopen it.
+      Future<void> tapCloser(String key) async {
+        if (find.byType(WordCard).evaluate().isEmpty) {
+          await openCard(tester);
+        }
+        // The ملاحظة/تفاسير row sits at the bottom of the scrollable
+        // middle: with a long meaning it is just below the fold until
+        // scrolled (same as in the real app) — scroll it into view.
+        await tester.scrollUntilVisible(
+          find.byKey(ValueKey(key)),
+          100,
+        );
+        await tester.tap(find.byKey(ValueKey(key)));
+        await tester.pumpAndSettle();
+        expect(find.byType(WordCard), findsNothing);
+      }
+
+      await tapCloser('playAyahButton');
+      expect(playedAyahs, [(3, 7)]);
+
+      await tapCloser('continueButton');
+      expect(continuedAyahs, [(3, 7)]);
+
+      await tapCloser('lastReadingButton');
+      expect(lastReadingTaps, 1);
+
+      await tapCloser('notesButton');
+      expect(notesTaps, 1);
+
+      await tapCloser('tafsirButton');
+      expect(tafsirTaps, 1);
+
+      await tapCloser('reciterButton');
+      expect(reciterPickerTaps, 1);
+
+      await tapCloser('playbackSettingsButton');
+      expect(playbackSettingsTaps, 1);
+
       expect(tester.takeException(), isNull);
     });
   });

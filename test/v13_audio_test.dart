@@ -144,7 +144,8 @@ void main() {
       expect(first, isNotNull);
       expect(await first!.readAsBytes(), [1, 2, 3]);
       expect(requested, [
-        'https://audio.qurancdn.com/wbw/002_033_004.mp3',
+        // v13.6: SurahPedia is tried first, so it answers at once.
+        'https://resources.surahpedia.com/Word_by-Word/2/002033004.mp3',
       ]);
       expect(service.localWbwFile(2, 33, 4)?.path, first.path);
 

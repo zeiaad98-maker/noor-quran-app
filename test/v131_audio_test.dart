@@ -176,7 +176,8 @@ void main() {
       expect(controller.lastError, isNull);
     });
 
-    test('word with الطنيجي plays the wbw file FIRST (v13.2)', () async {
+    test('word with الطنيجي plays the wbw file FIRST (v13.2, SurahPedia first in v13.6)',
+        () async {
       fake.autoFinish = false;
       controller.reciterIndex = 12; // خليفة الطنيجي (default)
       controller.queue = [(2, 33)];
@@ -187,7 +188,7 @@ void main() {
 
       expect(fake.loadCount, 1, reason: 'one play attempted');
       expect(fake.loadUris.single,
-          'https://audio.qurancdn.com/wbw/002_033_001.mp3',
+          'https://resources.surahpedia.com/Word_by-Word/2/002033001.mp3',
           reason: 'the wbw file plays first — no segment cut');
       expect(fake.loadUris.single, isNot(contains('khalefa_al_tunaiji')));
       expect(fake.loadUris.single, isNot(contains('Husary')));
@@ -195,7 +196,7 @@ void main() {
       expect(controller.lastError, isNull);
     });
 
-    test('word with الحصري himself also plays wbw first (v13.2)',
+    test('word with الحصري himself also plays wbw first (v13.2, SurahPedia first in v13.6)',
         () async {
       fake.autoFinish = false;
       controller.reciterIndex = 0;
@@ -207,7 +208,7 @@ void main() {
 
       expect(fake.loadCount, 1);
       expect(fake.loadUris.single,
-          'https://audio.qurancdn.com/wbw/002_033_001.mp3');
+          'https://resources.surahpedia.com/Word_by-Word/2/002033001.mp3');
       expect(controller.wordUsesWbw, isTrue);
       expect(controller.lastError, isNull);
     });
@@ -308,7 +309,7 @@ void main() {
       // not repeat (repeat is off).
       expect(fake.loadCount, 1);
       expect(fake.loadUris.single,
-          'https://audio.qurancdn.com/wbw/002_033_001.mp3');
+          'https://resources.surahpedia.com/Word_by-Word/2/002033001.mp3');
       expect(controller.wordUsesWbw, isTrue);
       expect(controller.lastError, isNull);
       expect(tester.takeException(), isNull);

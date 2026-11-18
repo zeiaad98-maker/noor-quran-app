@@ -161,9 +161,10 @@ void main() {
     expect(stats.total, 77429);
     // Shortening never drops a meaning: same count as before.
     expect(stats.withShortMeaning, coverage.withMeaning);
-    expect(stats.withShortMeaning, 49054);
-    // 49,054 / 77,429 = 63.4% of words have a short meaning gloss.
-    expect(stats.withShortMeaning / stats.total, greaterThan(0.63));
+    expect(stats.withShortMeaning, 50409);
+    // 50,409 / 77,429 = 65.1% of words have a short meaning gloss
+    // (v13.6: مخلوف + additions lift it from 49,054 / 63.4%).
+    expect(stats.withShortMeaning / stats.total, greaterThan(0.65));
     // NO displayed gloss exceeds the 160-char cap.
     expect(stats.over160, 0);
     expect(stats.maxLength, lessThanOrEqualTo(160));
@@ -174,16 +175,20 @@ void main() {
   test('v12 regression: 2:29 السَّمَاوَاتِ still starts with its definition',
       () async {
     final words = await QuranWordData.wordsForAyah(2, 29);
-    String? found;
-    for (final w in words) {
-      final lex = await QuranWordData.lexiconForWord(2, 29, w);
-      if (lex != null && lex.startsWith('سَمَاءُ كلّ شيء: أعلاه')) {
-        found = w;
-        break;
-      }
-    }
-    expect(found, isNotNull);
-    final gloss = await QuranWordData.wordGloss(2, 29, found!);
+    // The PLURAL سَمَاوَاتِ (not the singular السَّمَاءِ in the مخلوف
+    // phrase «اسْتَوَى إِلَى السَّمَاءِ», which مخلوف now glosses):
+    // مخلوف has no gloss for the plural, so it still falls through
+    // to the Raghib root lexicon.
+    final found = words.firstWhere(
+      (w) => QuranWordData.normalizeArabic(w).contains('سماوات'),
+      orElse: () => '',
+    );
+    expect(found, isNotEmpty,
+        reason: 'no plural سَمَاوَاتِ word in 2:29 (words: $words)');
+    final lex = await QuranWordData.lexiconForWord(2, 29, found);
+    expect(lex, isNotNull);
+    expect(lex!, startsWith('سَمَاءُ كلّ شيء: أعلاه'));
+    final gloss = await QuranWordData.wordGloss(2, 29, found);
     expect(gloss, startsWith('سَمَاءُ كلّ شيء: أعلاه'));
     expect(gloss.length, lessThanOrEqualTo(160));
   });
