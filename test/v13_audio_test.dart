@@ -9,8 +9,6 @@ import 'package:noor_quran/data/audio_downloads.dart';
 import 'package:noor_quran/data/quran_audio.dart';
 import 'package:noor_quran/widgets/noor_qcf_page.dart';
 
-import 'zip_fixture.dart';
-
 /// v13 audio (the user's top priority): pronunciation must be clear,
 /// pure and complete — for the WORD and the AYAH.
 ///
@@ -90,15 +88,11 @@ void main() {
 
     test('cacheAyahFile downloads once, replays from disk', () async {
       final requested = <String>[];
-      // v13.7: the per-ayah file over the www host goes first — the
-      // ZIP is only the fallback, so it is never requested here.
-      final zipBytes =
-          buildSurahZip({'002033.mp3': [9, 8, 7, 6]}, stored: true);
+      // v13.7: the per-ayah file over the www host goes first —
+      // v13.12: the ZIP is not in the playback path at all, so it
+      // is never requested here.
       final service = await makeService(MockClient((request) async {
         requested.add(request.url.toString());
-        if (request.url.toString().contains('/zips/')) {
-          return http.Response.bytes(zipBytes, 200);
-        }
         return http.Response.bytes([9, 8, 7, 6], 200);
       }));
       addTearDown(service.dispose);

@@ -202,11 +202,19 @@ int globalAyahNumber(int surah, int ayah) {
 /// 64k vs 128k so not bit-identical). Only editions verified that
 /// way are listed here — never add a reciter on a name match alone.
 /// Tunaiji has NO per-ayah files here (the API serves that edition
-/// surah-by-surah only), so he stays everyayah-only — same for
-/// محمد الطبلاوي and ياسر الدوسري (editions exist, 403 per-ayah).
+/// surah-by-surah only), so he has no islamic.network step — same
+/// for محمد الطبلاوي and ياسر الدوسري (editions exist, 403
+/// per-ayah). Since v13.12 all 16 reciters get alternate hosts
+/// ([altAyahUrls]) — the three below have no islamic.network step,
+/// and المنشاوي has no islamic.network step either (his edition
+/// there is murattal, not mujawwad).
 /// المنشاوي is also excluded: islamic.network's ar.minshawimujawwad
 /// is the murattal recording under a mujawwad name (verified
 /// 2026-11-18). Null when the reciter has no verified edition.
+/// Since v13.12 every reciter — including المنشاوي, Tunaiji,
+/// Tablawi and Dosari — gets alternate hosts instead
+/// ([altAyahUrls]); المنشاوي's alternates are the genuine
+/// mujawwad recording (Maqra + Al Furqan, content-verified).
 /// عجمي caveat: his surah-first ayahs on islamic.network carry a
 /// Basmala prefix (~2.5 s) before the ayah — mid-surah ayahs are
 /// clean. As a fallback that beats silence, and the Basmala is
@@ -247,6 +255,157 @@ String? islamicNetworkUrl(Reciter reciter, int surah, int ayah) {
   final (edition, kbps) = entry;
   return 'https://cdn.islamic.network/quran/audio/$kbps/$edition/'
       '${globalAyahNumber(surah, ayah)}.mp3';
+}
+
+/// Alternate per-ayah hosts for ALL 16 reciters (v13.12) — a
+/// DIFFERENT host family from everyayah.com, for when everyayah is
+/// unreachable from the user's Syrian network. Ordered per reciter
+/// (primary first); tried in [AudioDownloadService.cacheAyahFile]
+/// after the www per-ayah file and the islamic.network attempt,
+/// before the bare per-ayah file — the same position
+/// islamic.network occupies for the 12. Verified by CONTENT
+/// 2026-11-18 (byte-identical samples vs everyayah — full reports
+/// at ~/workspace/noor-quran-v1/reciter-alt-servers/REPORT.md,
+/// REPORT-group-a.md, REPORT-group-b.md):
+/// Tunaiji verses.quran.com + Maqra/Hugging Face; Tablawi
+/// Maqra/Hugging Face + mirrors.quranicaudio.com 128k (same
+/// recording re-encoded at 128k); Dosari mirrors.quranicaudio.com
+/// + Maqra/Hugging Face; Husary mirror + Maqra; Afasy Maqra +
+/// verses; Minshawi (genuine MUJAWWAD) Maqra + Al Furqan;
+/// Abdul Basit mirror + Maqra; Muaiqly mirror + Maqra; Hani Maqra
+/// + verses; Hudhaify Maqra + mirror 128k; Shatri Maqra + verses;
+/// Suwaid mirror + Maqra; Shuraym Maqra + verses; Sudais Maqra +
+/// verses; Akhdar Maqra 32k + Al Furqan; Ajmi Maqra 128k +
+/// Al Furqan. Al Furqan is used only where no static host carries
+/// the reciter (Minshawi, Akhdar, Ajmi) — its API serves the same
+/// verified files. Hugging Face resolve URLs redirect
+/// (huggingface.co → CDN); Dart's http client follows redirects
+/// by default (verified live 2026-11-18: the Maqra 002255 files
+/// resolve to 200, byte-identical to the everyayah references).
+/// Syria reachability is NOT verified from the VM — only the
+/// user's phone in Syria can test these hosts. Never add a host
+/// on a name match alone: every URL above was verified by content
+/// first. Minshawi's alternate hosts are the genuine MUJAWWAD
+/// recording — never islamic.network's ar.minshawimujawwad (it is
+/// murattal under a mujawwad name).
+List<String> altAyahUrls(Reciter reciter, int surah, int ayah) {
+  final name = ayahFileName(surah, ayah);
+  switch (reciter.everyayah) {
+    case 'khalefa_al_tunaiji_64kbps':
+      return [
+        'https://verses.quran.com/Tunaiji/mp3/$name.mp3',
+        'https://huggingface.co/datasets/maqra-project/khalifa-al-tunaiji-64kbps/resolve/main/$name.mp3',
+      ];
+    case 'Mohammad_al_Tablaway_64kbps':
+      return [
+        'https://huggingface.co/datasets/maqra-project/mohammad-al-tablawi-64kbps/resolve/main/$name.mp3',
+        'https://mirrors.quranicaudio.com/everyayah/Mohammad_al_Tablaway_128kbps/$name.mp3',
+      ];
+    case 'Yasser_Ad-Dussary_128kbps':
+      return [
+        'https://mirrors.quranicaudio.com/everyayah/Yasser_Ad-Dussary_128kbps/$name.mp3',
+        'https://huggingface.co/datasets/maqra-project/yasser-ad-dossari-128kbps/resolve/main/$name.mp3',
+      ];
+    case 'Husary_64kbps':
+      return [
+        'https://mirrors.quranicaudio.com/everyayah/Husary_64kbps/$name.mp3',
+        'https://huggingface.co/datasets/maqra-project/mahmoud-al-husary-murattal-64kbps/resolve/main/$name.mp3',
+      ];
+    case 'Alafasy_64kbps':
+      return [
+        'https://huggingface.co/datasets/maqra-project/mishari-alafasy-64kbps/resolve/main/$name.mp3',
+        'https://verses.quran.com/Alafasy/mp3/$name.mp3',
+      ];
+    case 'Minshawy_Mujawwad_64kbps':
+      return [
+        'https://huggingface.co/datasets/maqra-project/mohamed-siddiq-al-minshawi-mujawwad-64kbps/resolve/main/$name.mp3',
+        alFurqanAyahUrl('minshawy-mujawwad', surah, ayah),
+      ];
+    case 'Abdul_Basit_Murattal_64kbps':
+      return [
+        'https://mirrors.quranicaudio.com/everyayah/Abdul_Basit_Murattal_64kbps/$name.mp3',
+        'https://huggingface.co/datasets/maqra-project/abdul-basit-murattal-64kbps/resolve/main/$name.mp3',
+      ];
+    case 'Maher_AlMuaiqly_64kbps':
+      return [
+        'https://mirrors.quranicaudio.com/everyayah/Maher_AlMuaiqly_64kbps/$name.mp3',
+        'https://huggingface.co/datasets/maqra-project/maher-al-muaiqly-64kbps/resolve/main/$name.mp3',
+      ];
+    case 'Hani_Rifai_64kbps':
+      return [
+        'https://huggingface.co/datasets/maqra-project/hani-ar-rifai-64kbps/resolve/main/$name.mp3',
+        'https://verses.quran.com/Rifai/mp3/$name.mp3',
+      ];
+    case 'Hudhaify_64kbps':
+      return [
+        'https://huggingface.co/datasets/maqra-project/ali-al-hudhaifi-64kbps/resolve/main/$name.mp3',
+        'https://mirrors.quranicaudio.com/everyayah/Hudhaify_128kbps/$name.mp3',
+      ];
+    case 'Abu_Bakr_Ash-Shaatree_64kbps':
+      return [
+        'https://huggingface.co/datasets/maqra-project/abu-bakr-ash-shatri-64kbps/resolve/main/$name.mp3',
+        'https://verses.quran.com/Shatri/mp3/$name.mp3',
+      ];
+    case 'Ayman_Sowaid_64kbps':
+      return [
+        'https://mirrors.quranicaudio.com/everyayah/Ayman_Sowaid_64kbps/$name.mp3',
+        'https://huggingface.co/datasets/maqra-project/ayman-swaid-64kbps/resolve/main/$name.mp3',
+      ];
+    case 'Saood_ash-Shuraym_64kbps':
+      return [
+        'https://huggingface.co/datasets/maqra-project/saud-ash-shuraim-64kbps/resolve/main/$name.mp3',
+        'https://verses.quran.com/Shuraym/mp3/$name.mp3',
+      ];
+    case 'Abdurrahmaan_As-Sudais_64kbps':
+      return [
+        'https://huggingface.co/datasets/maqra-project/abdurrahman-as-sudais-64kbps/resolve/main/$name.mp3',
+        'https://verses.quran.com/Sudais/mp3/$name.mp3',
+      ];
+    case 'Ibrahim_Akhdar_32kbps':
+      return [
+        'https://huggingface.co/datasets/maqra-project/ibrahim-al-akhdar-32kbps/resolve/main/$name.mp3',
+        alFurqanAyahUrl('ibrahim-akhdar', surah, ayah),
+      ];
+    case 'ahmed_ibn_ali_al_ajamy_128kbps':
+      return [
+        'https://huggingface.co/datasets/maqra-project/ahmed-al-ajmi-128kbps/resolve/main/$name.mp3',
+        alFurqanAyahUrl('ahmed-al-ajamy', surah, ayah),
+      ];
+    default:
+      return const [];
+  }
+}
+
+/// Per-ayah mp3 from the Al Furqan API (free, no key):
+/// `https://alfurqan.online/api/v1/audio/<slug>/surah/<S>/ayah/<A>`
+/// with UNPADDED surah/ayah numbers. Only used in [altAyahUrls]
+/// for the three reciters no static host carries (Minshawi
+/// mujawwad, Akhdar, Ajmi) — the API's files for them were verified
+/// byte-identical to everyayah 2026-11-18. Rate limit 100 req/min/IP
+/// per its docs: fine for a paced page preload, not for bursts.
+String alFurqanAyahUrl(String slug, int surah, int ayah) =>
+    'https://alfurqan.online/api/v1/audio/$slug/surah/$surah/ayah/$ayah';
+
+/// The ayah-stream hosts in the order ONE ayah is streamed from
+/// when the cache misses (v13.12 — the user's correction,
+/// 2026-11-18): Wahy plays a single ayah directly, without
+/// downloading the whole surah, and the word path already streams
+/// from every host in order — but the ayah path streamed ONLY the
+/// bare everyayah URL (blocked from Syria) with a 20 s timeout.
+/// Now: www per-ayah first, then the alternate hosts
+/// ([altAyahUrls] — the same Part 1 list), then islamic.network
+/// (when the reciter has a verified edition), bare per-ayah last.
+/// Cache-on-play ([AudioDownloadService.cacheAyahFile]) stays the
+/// primary path — this list is only the streaming fallback on a
+/// cache failure, exactly like the word path
+/// ([wbwWordUrlsInOrder]). Pure, pinned by unit tests.
+List<String> ayahStreamUrlsInOrder(Reciter reciter, int surah, int ayah) {
+  final urls = <String>[everyayahWwwUrl(reciter, surah, ayah)];
+  urls.addAll(altAyahUrls(reciter, surah, ayah));
+  final islamicUrl = islamicNetworkUrl(reciter, surah, ayah);
+  if (islamicUrl != null) urls.add(islamicUrl);
+  urls.add(everyayahUrl(reciter, surah, ayah));
+  return urls;
 }
 
 /// Full-surah mp3 of [reciter] from mp3quran.net (fallback only —

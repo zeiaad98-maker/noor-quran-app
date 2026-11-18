@@ -236,8 +236,25 @@ void main() {
       // stale — the load count delta is the real "no sound" proof).
       expect(fake.loadCount, loadsBefore,
           reason: 'no sound before the page is whole');
-      // Failed on the first ayah — never reached ayah 7.
-      expect(requested.any((u) => u.contains('002007')), isFalse);
+      // v13.12: the preload COLLECTS the missing ayahs instead of
+      // failing on the first one — the fast path tried every
+      // ayah of the page (including the last, 2:16), then the
+      // full per-ayah chain ran ONCE MORE for the missing ayahs
+      // only; the www file for 2:6 was requested exactly twice
+      // (once per pass). There is NO whole-surah ZIP in the
+      // playback path at all.
+      expect(requested.any((u) => u.contains('002016')), isTrue,
+          reason: 'the fast path tried the whole page');
+      expect(
+          requested
+              .where((u) =>
+                  u ==
+                  'http://www.everyayah.com/data/Hani_Rifai_64kbps/002006.mp3')
+              .length,
+          2,
+          reason: 'the retry pass re-tried the missing ayah once');
+      expect(requested.any((u) => u.contains('/zips/')), isFalse,
+          reason: 'no ZIP in the playback path (v13.12)');
     });
   });
 }
