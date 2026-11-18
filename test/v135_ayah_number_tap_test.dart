@@ -9,7 +9,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:noor_quran/main.dart';
 import 'package:noor_quran/screens/surah_reader_screen.dart';
-import 'package:noor_quran/widgets/ayah_action_sheet.dart';
 import 'package:noor_quran/widgets/word_card.dart';
 
 import 'fake_just_audio.dart';
@@ -21,6 +20,12 @@ import 'fake_just_audio.dart';
 // tafsir card (which stays reachable from the word card's التفسير
 // button). End-to-end through the real reader: page 42 -> real
 // tapAt on 2:255's number glyph (Ayat al-Kursi).
+//
+// v13.8 (one-card rule, the user's order 2026-11-18 12:31): the old
+// ayah sheet is CANCELLED — the number tap now opens the WORD CARD
+// on the ayah's first word, with the sheet's info line (الجزء •
+// الربع • صفحة) and its note editor moved inside the card. The
+// tafsir card still must NOT open.
 //
 // Page choice: page 42 (2:253-2:256) has NO surah header, so the
 // test is not affected by a test-env artifact on header pages
@@ -75,7 +80,7 @@ void main() {
     }
   }
 
-  testWidgets('number tap on 2:255 opens the ayah sheet, not the tafsir card',
+  testWidgets('number tap on 2:255 opens the word card, not the tafsir card',
       (tester) async {
     await tester.pumpWidget(const NoorQuranApp());
     // The home screen builds after its async init; pump until the
@@ -154,9 +159,13 @@ void main() {
     await tester.tapAt(rp.localToGlobal(boxes.first.toRect().center));
     await pumpFrames(tester, 6);
 
-    // The ayah sheet opens for 2:255 — and the tafsir card does not.
-    expect(find.byType(AyahActionSheet), findsOneWidget);
-    expect(find.text('سورة البقرة • الآية 255 من 286'), findsOneWidget);
+    // The word card opens for 2:255 (first word) — and the tafsir
+    // card does not. The card carries the old sheet's info line
+    // ('الجزء 3' is unique to it — the reader's own header says
+    // 'الجزء الأول').
+    expect(find.byType(WordCard), findsOneWidget);
+    expect(find.byKey(const ValueKey('ayahHeader')), findsOneWidget);
+    expect(find.textContaining('الجزء 3'), findsOneWidget);
     expect(find.byType(TafsirCard), findsNothing);
     expect(tester.takeException(), isNull);
   });

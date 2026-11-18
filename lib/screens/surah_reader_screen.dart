@@ -17,7 +17,6 @@ import '../data/quran_audio.dart';
 import '../data/tafsir_downloads.dart';
 import '../main.dart';
 import '../widgets/audio_player_sheet.dart';
-import '../widgets/ayah_action_sheet.dart';
 import '../widgets/noor_qcf_page.dart';
 import '../widgets/quran_search_sheet.dart';
 import '../widgets/surah_name_image.dart';
@@ -468,12 +467,12 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
 
   /// Opens the audio player sheet, preset to [scope], and starts
   /// playing immediately. The reader play button opens it on the
-  /// current page; the ayah sheet opens it on that ayah; a tapped
-  /// word opens it on that word. [startPlayback] false opens the
-  /// sheet WITHOUT (re)starting anything — for the toolbar buttons
-  /// while audio is already playing (v13.7: the mini bar is gone,
-  /// so the toolbar button is the pause control and must not
-  /// restart the page when tapped mid-playback).
+  /// current page; the word card's الآية button opens it on that
+  /// ayah; a tapped word opens it on that word. [startPlayback]
+  /// false opens the sheet WITHOUT (re)starting anything — for the
+  /// toolbar buttons while audio is already playing (v13.7: the
+  /// mini bar is gone, so the toolbar button is the pause control
+  /// and must not restart the page when tapped mid-playback).
   void _openPlayerSheet({
     required PlayerScope scope,
     int? surah,
@@ -515,37 +514,6 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
     );
   }
 
-  void _openAyahSheet(int surah, int verse) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => AyahActionSheet(
-        surahNumber: surah,
-        verseNumber: verse,
-        pageNumber: _currentPage,
-        onPlayAyah: () => _openPlayerSheet(
-          scope: PlayerScope.ayah,
-          surah: surah,
-          verse: verse,
-        ),
-        onPlayWord: (wordIndex) => _openPlayerSheet(
-          scope: PlayerScope.word,
-          surah: surah,
-          verse: verse,
-          wordIndex: wordIndex,
-        ),
-        onOpenNotesScreen: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const NotesScreen()),
-          ).then((_) => _loadNotedAyahs());
-        },
-        onNoteChanged: _loadNotedAyahs,
-      ),
-    ).then((_) => _loadNotedAyahs());
-  }
-
   /// Word card (v13.6 — Wahy style): opened by tapping a single
   /// word on the page. Bottom sheet, ayah header with the tapped
   /// word in blue, 4 tabs, every button wired (the user's order:
@@ -553,10 +521,10 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
   /// word index from the QCF word map; the audio controller takes a
   /// 1-based word position, so the play callbacks add 1.
   ///
-  /// Tapping the verse-end number glyph opens the AYAH SHEET
-  /// ([_openAyahSheet]) — play ayah, word chips, notes (v13.5:
-  /// the world apps show the ayah sheet for an ayah tap; the
-  /// tafsir card moved to the word card's تفاسير button).
+  /// Tapping the verse-end number glyph opens this card too, on the
+  /// ayah's FIRST word (v13.8 one-card rule — the old ayah sheet is
+  /// cancelled: everything lives in the word card, so no cards
+  /// branch off cards).
   ///
   /// v13.2 (best-apps rule 1): tapping a word plays JUST the word
   /// immediately — the wbw file, never the ayah. v13.7: no bar
@@ -565,6 +533,8 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
   /// v13.6: the auto-play honours the word settings toggle
   /// ([AudioPlayerController.wordAutoPlay]) — when off, the tap
   /// opens the card only and the green ▶ plays the word.
+  /// v13.8: the toggle defaults to OFF — a tap opens the meaning
+  /// only and downloads nothing; audio plays only from the ▶.
   void _openWordCard(int surah, int verse, int wordIndex) {
     if (_audioController.wordAutoPlay) {
       unawaited(_audioController.playWord(surah, verse, wordIndex + 1));
@@ -574,6 +544,7 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
       surah: surah,
       verse: verse,
       wordIndex: wordIndex,
+      pageNumber: _currentPage,
       audioController: _audioController,
       onPlayWord: (word) {
         unawaited(_audioController.playWord(surah, verse, word + 1));
@@ -588,9 +559,16 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
         unawaited(_audioController.playFromAyah(surah, verse));
       },
       onGoToLastReading: _goToLastReading,
-      // ملاحظة opens the ayah sheet (note editor lives there);
-      // تفاسير opens the tafsir card. The card pops itself first.
-      onOpenNotes: () => _openAyahSheet(surah, verse),
+      // ملاحظاتي (the link inside the card's inline note editor)
+      // opens the notes list; the editor itself lives in the card
+      // now (v13.8). تفاسير opens the tafsir card. The card pops
+      // itself first for both.
+      onOpenNotesScreen: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const NotesScreen()),
+        ).then((_) => _loadNotedAyahs());
+      },
       onOpenTafsir: () => _openTafsirCard(surah, verse),
       onOpenReciterPicker: () => showReciterPickerSheet(
         context: context,
@@ -622,11 +600,11 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
   }
 
   /// Tafsir card (v12): opened from the word card's التفسير button
-  /// (v13.5: the verse-end number glyph ۝ opens the ayah sheet now).
+  /// (v13.8: the verse-end number glyph ۝ opens the word card now).
   /// Ayah in a cream box + the selected tafsir (selector pill
   /// switches between the six) + أسباب النزول when the ayah has an
   /// entry. استمع للآية opens the full player; ملاحظاتي opens the
-  /// old ayah sheet (notes / word chips / ayah audio).
+  /// notes screen (v13.8: the old ayah sheet is gone).
   void _openTafsirCard(int surah, int verse) {
     showTafsirCard(
       context: context,
@@ -638,7 +616,12 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
         surah: surah,
         verse: verse,
       ),
-      onOpenNotes: () => _openAyahSheet(surah, verse),
+      onOpenNotes: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const NotesScreen()),
+        ).then((_) => _loadNotedAyahs());
+      },
     );
   }
 
@@ -792,7 +775,7 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                                   theme: qcfTheme,
                                   onPageChanged: _onPageChanged,
                                   onTap: (surah, verse) =>
-                                      _openAyahSheet(surah, verse),
+                                      _openWordCard(surah, verse, 0),
                                   onWordTap: (surah, verse, wordIndex) =>
                                       _openWordCard(surah, verse, wordIndex),
                                   onWordLongPress: (surah, verse, wordIndex) =>

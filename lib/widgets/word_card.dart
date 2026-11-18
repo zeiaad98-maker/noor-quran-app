@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:quran/quran.dart' as quran;
@@ -163,23 +164,28 @@ enum _WahyTab { meaning, sarf, irab, qiraat }
 /// [onRepeatWord] (circled ▶ — repeats the word [repeatCount]
 /// times, never the reciter-voice clip), [onPlayAyah] (الآية),
 /// [onContinueFromAyah] (استمرار — the surah from this ayah on),
-/// [onGoToLastReading] (آخر قراءة), [onOpenNotes] (ملاحظة),
-/// [onOpenTafsir] (تفاسير), [onOpenReciterPicker] (reciter pill),
+/// [onGoToLastReading] (آخر قراءة), [onOpenTafsir] (تفاسير),
+/// [onOpenReciterPicker] (reciter pill),
 /// [onOpenPlaybackSettings] (bottom-left gear). The magnifier and
 /// the gear open the card's own sheets (word details / word
-/// settings) — no callback needed.
+/// settings) — no callback needed. The note editor lives INSIDE the
+/// card (v13.8 one-card rule — the old ayah sheet is gone): the
+/// ملاحظة pill toggles it in place; [onOpenNotesScreen] is only the
+/// «ملاحظاتي» link inside that editor, opening the notes list.
+/// [pageNumber] feeds the card's info line (الجزء • الربع • صفحة).
 Future<void> showWordCard({
   required BuildContext context,
   required int surah,
   required int verse,
   required int wordIndex,
+  required int pageNumber,
   required AudioPlayerController audioController,
   required void Function(int wordIndex) onPlayWord,
   required void Function(int wordIndex) onRepeatWord,
   required VoidCallback onPlayAyah,
   required VoidCallback onContinueFromAyah,
   required VoidCallback onGoToLastReading,
-  required VoidCallback onOpenNotes,
+  required VoidCallback onOpenNotesScreen,
   required VoidCallback onOpenTafsir,
   required VoidCallback onOpenReciterPicker,
   required VoidCallback onOpenPlaybackSettings,
@@ -192,13 +198,14 @@ Future<void> showWordCard({
       surah: surah,
       verse: verse,
       wordIndex: wordIndex,
+      pageNumber: pageNumber,
       audioController: audioController,
       onPlayWord: onPlayWord,
       onRepeatWord: onRepeatWord,
       onPlayAyah: onPlayAyah,
       onContinueFromAyah: onContinueFromAyah,
       onGoToLastReading: onGoToLastReading,
-      onOpenNotes: onOpenNotes,
+      onOpenNotesScreen: onOpenNotesScreen,
       onOpenTafsir: onOpenTafsir,
       onOpenReciterPicker: onOpenReciterPicker,
       onOpenPlaybackSettings: onOpenPlaybackSettings,
@@ -210,13 +217,14 @@ class WordCard extends StatefulWidget {
   final int surah;
   final int verse;
   final int wordIndex;
+  final int pageNumber;
   final AudioPlayerController audioController;
   final void Function(int wordIndex) onPlayWord;
   final void Function(int wordIndex) onRepeatWord;
   final VoidCallback onPlayAyah;
   final VoidCallback onContinueFromAyah;
   final VoidCallback onGoToLastReading;
-  final VoidCallback onOpenNotes;
+  final VoidCallback onOpenNotesScreen;
   final VoidCallback onOpenTafsir;
   final VoidCallback onOpenReciterPicker;
   final VoidCallback onOpenPlaybackSettings;
@@ -226,13 +234,14 @@ class WordCard extends StatefulWidget {
     required this.surah,
     required this.verse,
     required this.wordIndex,
+    required this.pageNumber,
     required this.audioController,
     required this.onPlayWord,
     required this.onRepeatWord,
     required this.onPlayAyah,
     required this.onContinueFromAyah,
     required this.onGoToLastReading,
-    required this.onOpenNotes,
+    required this.onOpenNotesScreen,
     required this.onOpenTafsir,
     required this.onOpenReciterPicker,
     required this.onOpenPlaybackSettings,
@@ -244,7 +253,12 @@ class WordCard extends StatefulWidget {
 
 class _WordCardState extends State<WordCard> {
   late final List<QcfWordInfo> _words;
-  late final int _wordIndex;
+  // Mutable since v13.8: tapping another word in the ayah header
+  // switches the card to that word in place (no close/reopen).
+  late int _wordIndex;
+  // One tap recognizer per header word, built once (the words of
+  // the ayah never change) and disposed with the card.
+  late final List<TapGestureRecognizer> _wordTapRecognizers;
   _WahyTab _tab = _WahyTab.meaning;
   String? _gloss;
   String? _morph;
@@ -253,6 +267,11 @@ class _WordCardState extends State<WordCard> {
   bool _loading = true;
   bool _isBookmarked = false;
   bool _hasNote = false;
+  // v13.8 (one-card rule): the note editor lives inside this card.
+  String? _noteText;
+  String? _quarterLabel;
+  bool _showNoteEditor = false;
+  late final TextEditingController _noteController;
 
   @override
   void initState() {
@@ -261,6 +280,33 @@ class _WordCardState extends State<WordCard> {
     // those merge بَعۡدَ مَا in 2:181 etc. and would shift the count).
     _words = buildQcfWordMap(widget.surah, widget.verse).words;
     _wordIndex = widget.wordIndex.clamp(0, _words.length - 1);
+    _wordTapRecognizers = List.generate(
+      _words.length,
+      (i) => TapGestureRecognizer()..onTap = () => _switchWord(i),
+    );
+    _noteController = TextEditingController();
+    _loadWord();
+  }
+
+  @override
+  void dispose() {
+    _noteController.dispose();
+    for (final r in _wordTapRecognizers) {
+      r.dispose();
+    }
+    super.dispose();
+  }
+
+  /// v13.8: switch the card to another word of the same ayah, in
+  /// place — the header tap. Resets to the المعنى tab; a tap on the
+  /// word already shown does nothing. Does NOT play audio: the user
+  /// only wants the meaning on tap; the green ▶ plays the word.
+  void _switchWord(int index) {
+    if (index == _wordIndex) return;
+    setState(() {
+      _wordIndex = index;
+      _tab = _WahyTab.meaning;
+    });
     _loadWord();
   }
 
@@ -268,6 +314,10 @@ class _WordCardState extends State<WordCard> {
   String get _lookupText => _words[_wordIndex].lookupText;
 
   Future<void> _loadWord() async {
+    // Generation guard (v13.8): a header tap can start a second load
+    // while the first is in flight — a stale load must not overwrite
+    // the word the card now shows.
+    final index = _wordIndex;
     setState(() => _loading = true);
     final results = await Future.wait([
       QuranWordData.wordGloss(widget.surah, widget.verse, _lookupText),
@@ -277,15 +327,18 @@ class _WordCardState extends State<WordCard> {
       QiraatData.variantsForAyah(widget.surah, widget.verse),
       AyahBookmarks.isBookmarked(widget.surah, widget.verse),
       AyahNotes.getNote(widget.surah, widget.verse),
+      QuranWordData.hizbQuarterLabel(widget.surah, widget.verse),
     ]);
-    if (!mounted) return;
+    if (!mounted || index != _wordIndex) return;
     setState(() {
       _gloss = results[0] as String?;
       _morph = results[1] as String?;
       _qiraatForWord = results[2] as List<QiraatVariant>;
       _qiraatForAyah = results[3] as List<QiraatVariant>;
       _isBookmarked = results[4] as bool;
-      _hasNote = (results[5] as String?) != null;
+      _noteText = results[5] as String?;
+      _hasNote = _noteText != null;
+      _quarterLabel = results[6] as String?;
       _loading = false;
     });
   }
@@ -294,6 +347,44 @@ class _WordCardState extends State<WordCard> {
     final now = await AyahBookmarks.toggle(widget.surah, widget.verse);
     if (!mounted) return;
     setState(() => _isBookmarked = now);
+  }
+
+  /// v13.8: the ملاحظة pill toggles the inline editor — the card
+  /// stays open. Opening it pre-fills the current note (if any).
+  void _toggleNoteEditor() {
+    setState(() {
+      _showNoteEditor = !_showNoteEditor;
+      if (_showNoteEditor) _noteController.text = _noteText ?? '';
+    });
+  }
+
+  /// Save from the inline editor. An empty text deletes the note
+  /// (the old sheet's rule). The editor closes; the saved note shows
+  /// in the yellow box below and the pill icon turns green.
+  Future<void> _saveNote() async {
+    final text = _noteController.text.trim();
+    if (text.isEmpty) {
+      await AyahNotes.deleteNote(widget.surah, widget.verse);
+    } else {
+      await AyahNotes.saveNote(widget.surah, widget.verse, text);
+    }
+    if (!mounted) return;
+    setState(() {
+      _noteText = text.isEmpty ? null : text;
+      _hasNote = text.isNotEmpty;
+      _showNoteEditor = false;
+    });
+  }
+
+  /// Delete from the inline editor (only offered when a note exists).
+  Future<void> _deleteNote() async {
+    await AyahNotes.deleteNote(widget.surah, widget.verse);
+    if (!mounted) return;
+    setState(() {
+      _noteText = null;
+      _hasNote = false;
+      _showNoteEditor = false;
+    });
   }
 
   @override
@@ -340,6 +431,8 @@ class _WordCardState extends State<WordCard> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   _ayahHeader(isDark),
+                  const SizedBox(height: 6),
+                  _ayahInfoLine(),
                   const SizedBox(height: 10),
                   _tabsRow(),
                   _audioErrorRow(),
@@ -352,6 +445,14 @@ class _WordCardState extends State<WordCard> {
                   _lastReadingBar(isDark),
                   const SizedBox(height: 10),
                   _notesTafsirRow(isDark),
+                  if (_showNoteEditor) ...[
+                    const SizedBox(height: 10),
+                    _noteEditor(isDark),
+                  ],
+                  if (_noteText != null && !_showNoteEditor) ...[
+                    const SizedBox(height: 10),
+                    _savedNoteBox(),
+                  ],
                 ],
               ),
             ),
@@ -375,6 +476,8 @@ class _WordCardState extends State<WordCard> {
 
   /// The whole ayah in a white box, the tapped word in blue, the
   /// verse number in a small medallion at the end (the sample's ٤).
+  /// v13.8: every word is tappable — a tap switches the card to
+  /// that word in place (see [_switchWord]), no close/reopen.
   Widget _ayahHeader(bool isDark) {
     final baseStyle = GoogleFonts.amiri(
       fontSize: 20,
@@ -390,6 +493,7 @@ class _WordCardState extends State<WordCard> {
           fontWeight: isTapped ? FontWeight.bold : FontWeight.normal,
           color: isTapped ? _blue : baseStyle.color,
         ),
+        recognizer: _wordTapRecognizers[i],
       ));
       if (i < _words.length - 1) {
         spans.add(const TextSpan(text: ' '));
@@ -427,6 +531,133 @@ class _WordCardState extends State<WordCard> {
       child: RichText(
         textAlign: TextAlign.center,
         text: TextSpan(style: baseStyle, children: spans),
+      ),
+    );
+  }
+
+  /// v13.8 (one-card rule): the old ayah sheet's info line lives
+  /// here now — juz + hizb-quarter + page — so the number tap loses
+  /// nothing when it opens this card instead of the sheet.
+  Widget _ayahInfoLine() {
+    final juz = quran.getJuzNumber(widget.surah, widget.verse);
+    return Text(
+      'الجزء $juz • ${_quarterLabel ?? '...'} • صفحة ${widget.pageNumber}',
+      textAlign: TextAlign.center,
+      style: GoogleFonts.amiri(fontSize: 14, color: Colors.grey),
+    );
+  }
+
+  /// v13.8: the note editor, inlined in the card (the old ayah
+  /// sheet's AlertDialog, moved here) — gold-bordered box with the
+  /// label, the text field, green حفظ, red حذف الملاحظة (only when
+  /// a note exists), and the ملاحظاتي link to the notes list.
+  /// The card stays open the whole time.
+  Widget _noteEditor(bool isDark) {
+    return Container(
+      key: const ValueKey('noteEditor'),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _boxColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF8A723D), width: 1.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'ملاحظة على الآية',
+            style: GoogleFonts.amiri(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: _green,
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            key: const ValueKey('noteTextField'),
+            controller: _noteController,
+            maxLines: 5,
+            decoration: const InputDecoration(
+              hintText: 'اكتب ملاحظتك أو فائدة من الآية...',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton(
+                  key: const ValueKey('saveNoteButton'),
+                  onPressed: _saveNote,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _green,
+                  ),
+                  child: Text(
+                    'حفظ',
+                    style: GoogleFonts.amiri(fontSize: 16),
+                  ),
+                ),
+              ),
+              if (_hasNote) ...[
+                const SizedBox(width: 10),
+                // Flexible + ellipsis: the three-button row must
+                // never overflow — in the test font the delete label
+                // runs 16px wide of the card.
+                Flexible(
+                  child: TextButton(
+                    key: const ValueKey('deleteNoteButton'),
+                    onPressed: _deleteNote,
+                    child: Text(
+                      'حذف الملاحظة',
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.amiri(
+                        fontSize: 15,
+                        color: Colors.red,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(width: 10),
+              TextButton(
+                key: const ValueKey('myNotesButton'),
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  widget.onOpenNotesScreen();
+                },
+                child: Text(
+                  'ملاحظاتي',
+                  style: GoogleFonts.amiri(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: _green,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The saved note, shown in the yellow box (the old sheet's box)
+  /// once the editor closes — the visible confirmation of a save.
+  Widget _savedNoteBox() {
+    return Container(
+      key: const ValueKey('savedNoteBox'),
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF3C4).withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        _noteText!,
+        style: GoogleFonts.amiri(
+          fontSize: 16,
+          color: const Color(0xFF2D2A26),
+        ),
       ),
     );
   }
@@ -889,8 +1120,9 @@ class _WordCardState extends State<WordCard> {
     );
   }
 
-  /// تفاسير + ملاحظة pills (each opens its card/sheet; the card
-  /// pops itself first).
+  /// تفاسير + ملاحظة pills. تفاسير pops the card and opens the
+  /// tafsir card; ملاحظة toggles the INLINE note editor (v13.8) —
+  /// the card stays open, no sheet branching off the card.
   Widget _notesTafsirRow(bool isDark) {
     return Row(
       children: [
@@ -912,10 +1144,7 @@ class _WordCardState extends State<WordCard> {
             label: 'ملاحظة',
             icon: _hasNote ? Icons.note_alt : Icons.note_add_outlined,
             iconColor: _hasNote ? _green : null,
-            onTap: () {
-              Navigator.of(context).pop();
-              widget.onOpenNotes();
-            },
+            onTap: _toggleNoteEditor,
           ),
         ),
       ],

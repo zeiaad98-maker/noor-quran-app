@@ -54,9 +54,10 @@ class AudioPlayerController extends ChangeNotifier {
   double speed = 1.0;
 
   /// Whether tapping a word plays it immediately (v13.6, the word
-  /// card's gear settings). Default true — the behaviour since v13.2.
-  /// When false, a tap opens the card only; the green ▶ plays it.
-  bool wordAutoPlay = true;
+  /// card's gear settings). Default false since v13.8 — the user
+  /// only wants the meaning on tap; the green ▶ plays the word.
+  /// When true, a tap plays the word at once.
+  bool wordAutoPlay = false;
   int fromPage = 1;
   int toPage = 1;
 
@@ -200,7 +201,7 @@ class AudioPlayerController extends ChangeNotifier {
     repeatScope = prefs.getBool(_repeatScopeKey) ?? false;
     repeatCount = prefs.getInt(_repeatCountKey) ?? 3;
     speed = prefs.getDouble(_speedKey) ?? 1.0;
-    wordAutoPlay = prefs.getBool(_wordAutoPlayKey) ?? true;
+    wordAutoPlay = prefs.getBool(_wordAutoPlayKey) ?? false;
     notifyListeners();
   }
 
@@ -214,7 +215,7 @@ class AudioPlayerController extends ChangeNotifier {
   }
 
   /// Word-card gear setting (v13.6): tapping a word plays it at once
-  /// (true, the default) or only opens the card (false).
+  /// (true) or only opens the card (false, the default since v13.8).
   void setWordAutoPlay(bool value) {
     wordAutoPlay = value;
     notifyListeners();
