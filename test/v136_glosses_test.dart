@@ -73,13 +73,15 @@ void main() {
     // Measured with the app's own matching (strict for مخلوف /
     // additions): 10,322 words show a مخلوف gloss first (was 10,308
     // before the v13.11 normalizeArabic fix), 3 words an additions
-    // gloss (4:4 + v13.9: 15:11، 15:12); غريب 11,855 (was 9,851
-    // before the same fix); the union with غريب + Raghib was 50,411
+    // gloss (4:4 + v13.9: 15:11، 15:12); غريب 11,856 (was 9,851
+    // before the same fix, 11,855 before the v13.11 hamza-seat
+    // unification — that fix also matches 28:30 شَٰطِيِٕ to غريب's
+    // «جَانِبِ.»); the union with غريب + Raghib was 50,411
     // (65.1%) — v13.11: the Tafsir Center covers every word, so the
     // union is 77,429 (100%).
     expect(stats.withMakhloof, 10322);
     expect(stats.withAddition, 3);
-    expect(stats.withGharib, 11855);
+    expect(stats.withGharib, 11856);
     expect(stats.withLexicon, 46199);
     expect(stats.withMeaning, 77429);
     // A gloss still exists for EVERY word (meaning or morphology).

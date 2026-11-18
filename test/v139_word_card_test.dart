@@ -179,7 +179,7 @@ void main() {
     });
 
     testWidgets(
-        '15:11 وَمَا: المعنى shows a meaning, الإعراب keeps the morph text',
+        '15:11 وَمَا: المعنى shows a meaning, الإعراب shows the TC i\'rab',
         (tester) async {
       set411(tester);
       final idx = wordIndexOf(15, 11, 'وما');
@@ -198,7 +198,13 @@ void main() {
       expect(find.text('حرف نفي'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('tabIrab')));
       await tester.pumpAndSettle();
-      expect(find.text('حرف نفي'), findsOneWidget);
+      // v13.11: the الإعراب tab shows the Tafsir Center per-word
+      // i'rab in full (with the small credit line), not the
+      // simplified morphology description.
+      expect(find.textContaining('حَرْفُ نَفْيٍ'), findsOneWidget);
+      expect(
+          find.text('المصدر: مركز تفسير للدراسات القرآنية — tafsir.net'),
+          findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 

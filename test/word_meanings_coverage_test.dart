@@ -54,8 +54,10 @@ void main() {
     // غريب القرآن alone covered 9,079 (11.7%) before the lexicon,
     // 9,851 after the v12 dagger-alef fix (see the header comment),
     // 11,855 after the v13.11 normalizeArabic fix (open tanwin +
-    // U+065E + ءا→ا collapse match ~2,000 more words).
-    expect(stats.withGharib, 11855);
+    // U+065E + ءا→ا collapse match ~2,000 more words), 11,856
+    // after the hamza-seat unification (28:30 شَٰطِيِٕ now matches
+    // غريب's «جَانِبِ.»).
+    expect(stats.withGharib, 11856);
     // مفردات الراغب (root lexicon) covers 46,199 words on its own.
     expect(stats.withLexicon, 46199);
     // Combined meaning coverage: Tafsir Center covers every word —

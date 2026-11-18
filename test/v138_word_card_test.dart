@@ -206,9 +206,11 @@ void main() {
       await openCard(tester);
 
       // Move off the meaning tab first (word 7's sarf).
+      // v13.11: the sarf tab shows the Tafsir Center sarf in full
+      // (diacritics included), not the parsed simplified fields.
       await tester.tap(find.byKey(const ValueKey('tabSarf')));
       await tester.pump();
-      expect(find.textContaining('جمع مؤنث سالم'), findsOneWidget);
+      expect(find.textContaining('اسْمُ مَفْعُولٍ'), findsOneWidget);
 
       // Switch words from the header.
       await tapHeaderWord(tester, words, 6);
@@ -223,7 +225,7 @@ void main() {
       );
       final decoration = tabContainer.decoration as BoxDecoration;
       expect(decoration.color, const Color(0xFF0D6E52));
-      expect(find.textContaining('جمع مؤنث سالم'), findsNothing);
+      expect(find.textContaining('اسْمُ مَفْعُولٍ'), findsNothing);
       expect(tester.takeException(), isNull);
     });
 
