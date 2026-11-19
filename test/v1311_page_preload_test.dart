@@ -10,6 +10,7 @@ import 'package:noor_quran/data/audio_player_controller.dart';
 import 'package:noor_quran/data/quran_audio.dart';
 
 import 'fake_just_audio.dart';
+import 'fake_mp3.dart';
 
 /// v13.11 — whole-page preload + fallback reorder (user orders,
 /// 2026-11-18):
@@ -64,7 +65,7 @@ void main() {
           return http.Response.bytes([], 500);
         }
         if (request.url.host == 'everyayah.com') {
-          return http.Response.bytes([7], 200);
+          return http.Response.bytes(fakeMp3Bytes(fill: 7), 200);
         }
         return http.Response.bytes([], 404);
       }));
@@ -74,7 +75,7 @@ void main() {
       final file = await service.cacheAyahFile(rifai, 2, 7);
 
       expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [7]);
+      expect(await file!.readAsBytes(), fakeMp3Bytes(fill: 7));
       expect(requested.any((u) => u.contains('/zips/')), isFalse,
           reason: 'the ZIP must not run before the small bare file');
       expect(
@@ -97,7 +98,7 @@ void main() {
         if (request.url.host == 'cdn.islamic.network') {
           // Global ayah 14 = 2:7 (7 ayahs in surah 1 + 7).
           expect(request.url.path, endsWith('/14.mp3'));
-          return http.Response.bytes([7], 200);
+          return http.Response.bytes(fakeMp3Bytes(fill: 7), 200);
         }
         return http.Response.bytes([], 404);
       }));
@@ -107,7 +108,7 @@ void main() {
       final file = await service.cacheAyahFile(rifai, 2, 7);
 
       expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [7]);
+      expect(await file!.readAsBytes(), fakeMp3Bytes(fill: 7));
       expect(requested.any((u) => u.contains('/zips/')), isFalse,
           reason: 'the ZIP must not run before the other small files');
       expect(
@@ -185,7 +186,7 @@ void main() {
         // One small per-ayah file per ayah, distinct bytes each.
         final name = request.url.pathSegments.last;
         final ayah = int.parse(name.substring(3, 6));
-        return http.Response.bytes([ayah], 200);
+        return http.Response.bytes(fakeMp3Bytes(fill: ayah), 200);
       }));
       addTearDown(service.dispose);
       final controller = AudioPlayerController(downloads: service);
@@ -205,7 +206,7 @@ void main() {
       for (final (s, a) in pageAyahs) {
         final cached = service.localAyahFile(rifai, s, a);
         expect(cached, isNotNull, reason: 'ayah $s:$a cached');
-        expect(await cached!.readAsBytes(), [a]);
+        expect(await cached!.readAsBytes(), fakeMp3Bytes(fill: a));
       }
       // ...and the player loaded the local file, not a stream.
       expect(fake.loadCount, loadsBefore + 1);

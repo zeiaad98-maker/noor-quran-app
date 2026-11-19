@@ -17,6 +17,7 @@ import 'package:noor_quran/widgets/audio_player_sheet.dart';
 import 'package:noor_quran/widgets/word_card.dart';
 
 import 'fake_just_audio.dart';
+import 'fake_mp3.dart';
 
 // v13.7 — the user's two reports on v13.6 (2026-11-18 10:19):
 //
@@ -72,12 +73,12 @@ void main() {
       final requested = <String>[];
       service = await buildService(MockClient((request) async {
         requested.add(request.url.toString());
-        return http.Response.bytes([5, 5, 5], 200);
+        return http.Response.bytes(fakeMp3Bytes(fill: 5), 200);
       }));
 
       final file = await service.cacheAyahFile(reciters[12], 2, 33);
       expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [5, 5, 5]);
+      expect(await file!.readAsBytes(), fakeMp3Bytes(fill: 5));
       expect(requested, [
         'https://resources.surahpedia.com/Khalefa_Al-Tunaiji/002033.mp3',
       ]);
@@ -155,8 +156,8 @@ void main() {
     });
 
     tearDown(() {
-      AudioDownloadService.fetchAttempts = 1;
-      AudioDownloadService.stallTimeout = const Duration(seconds: 8);
+      AudioDownloadService.fetchAttempts = 2;
+      AudioDownloadService.stallTimeout = const Duration(seconds: 30);
       AudioDownloadService.retryBackoff = const Duration(seconds: 2);
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(

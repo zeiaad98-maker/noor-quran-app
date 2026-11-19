@@ -11,6 +11,7 @@ import 'package:noor_quran/data/quran_audio.dart';
 
 import 'fake_just_audio.dart';
 import 'zip_fixture.dart';
+import 'fake_mp3.dart';
 
 /// v13.5 audio fallbacks, order updated in v13.6, v13.7 and v13.11.
 ///
@@ -72,14 +73,14 @@ void main() {
       service = await buildService(MockClient((request) async {
         requested.add(request.url.toString());
         if (request.url.host == 'resources.surahpedia.com') {
-          return http.Response.bytes([5, 5, 5], 200);
+          return http.Response.bytes(fakeMp3Bytes(fill: 5), 200);
         }
         return http.Response.bytes([], 404);
       }));
 
       final file = await service.cacheWbwFile(3, 7, 15);
       expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [5, 5, 5]);
+      expect(await file!.readAsBytes(), fakeMp3Bytes(fill: 5));
       expect(requested, [
         'https://resources.surahpedia.com/Word_by-Word/3/003007015.mp3',
       ]);
@@ -150,7 +151,7 @@ void main() {
       // Distinct bytes per ayah, so the test proves the RIGHT file
       // is served for each ayah.
       final zipBytes = buildSurahZip(
-        {for (var a = 1; a <= 7; a++) '00100$a.mp3': [a]},
+        {for (var a = 1; a <= 7; a++) '00100$a.mp3': fakeMp3Bytes(fill: a)},
         stored: true,
       );
       service = await buildService(MockClient((request) async {
@@ -176,7 +177,7 @@ void main() {
       for (var a = 1; a <= 7; a++) {
         final cached = service.localAyahFile(tunaiji, 1, a);
         expect(cached, isNotNull, reason: 'ayah 1:$a cached');
-        expect(await cached!.readAsBytes(), [a]);
+        expect(await cached!.readAsBytes(), fakeMp3Bytes(fill: a));
       }
       // The ZIP itself is deleted after extraction — the extracted
       // per-ayah files ARE the cache.
@@ -188,7 +189,7 @@ void main() {
 
     test('deflated ZIP entries inflate correctly', () async {
       final zipBytes = buildSurahZip(
-        {for (var a = 1; a <= 4; a++) '11200$a.mp3': [a, a, a]},
+        {for (var a = 1; a <= 4; a++) '11200$a.mp3': fakeMp3Bytes(fill: a)},
       );
       service = await buildService(MockClient((request) async {
         if (request.url.path.endsWith('.zip')) {
@@ -205,7 +206,7 @@ void main() {
       expect(service.activeJob!.status, DownloadStatus.done);
       final file = service.localAyahFile(reciters[0], 112, 2);
       expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [2, 2, 2]);
+      expect(await file!.readAsBytes(), fakeMp3Bytes(fill: 2));
     });
 
     test('failed SurahPedia, www per-ayah and islamic.network fall '
@@ -229,12 +230,12 @@ void main() {
             request.url.host == 'huggingface.co') {
           return http.Response.bytes([], 404);
         }
-        return http.Response.bytes([7, 7], 200);
+        return http.Response.bytes(fakeMp3Bytes(fill: 7), 200);
       }));
 
       final file = await service.cacheAyahFile(reciters[0], 112, 2);
       expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [7, 7]);
+      expect(await file!.readAsBytes(), fakeMp3Bytes(fill: 7));
       // No ZIP request: the bare file served the ayah first.
       expect(requested, [
         'https://resources.surahpedia.com/Husary/112002.mp3',
@@ -248,11 +249,11 @@ void main() {
 
     test('ZIP missing the ayah falls back to per-ayah for it', () async {
       AudioDownloadService.fetchAttempts = 1;
-      addTearDown(() => AudioDownloadService.fetchAttempts = 1);
+      addTearDown(() => AudioDownloadService.fetchAttempts = 2);
       final requested = <String>[];
       // The ZIP holds only 001001 — the other 6 ayahs are not in it.
       final zipBytes = buildSurahZip(
-        {'001001.mp3': [1]},
+        {'001001.mp3': fakeMp3Bytes(fill: 1)},
         stored: true,
       );
       service = await buildService(MockClient((request) async {
@@ -266,7 +267,7 @@ void main() {
         if (request.url.host == 'everyayah.com') {
           final name = request.url.pathSegments.last;
           final ayah = int.parse(name.substring(3, 6));
-          return http.Response.bytes([ayah], 200);
+          return http.Response.bytes(fakeMp3Bytes(fill: ayah), 200);
         }
         return http.Response.bytes([], 404);
       }));
@@ -288,7 +289,7 @@ void main() {
       for (var a = 1; a <= 7; a++) {
         final cached = service.localAyahFile(tunaiji, 1, a);
         expect(cached, isNotNull, reason: 'ayah 1:$a cached');
-        expect(await cached!.readAsBytes(), [a]);
+        expect(await cached!.readAsBytes(), fakeMp3Bytes(fill: a));
       }
     });
 
@@ -302,14 +303,14 @@ void main() {
         // per-ayah file serves the ayah, so the garbage ZIP is
         // never even downloaded.
         if (request.url.host == 'www.everyayah.com') {
-          return http.Response.bytes([4], 200);
+          return http.Response.bytes(fakeMp3Bytes(fill: 4), 200);
         }
-        return http.Response.bytes([4], 200);
+        return http.Response.bytes(fakeMp3Bytes(fill: 4), 200);
       }));
 
       final file = await service.cacheAyahFile(reciters[0], 112, 3);
       expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [4]);
+      expect(await file!.readAsBytes(), fakeMp3Bytes(fill: 4));
     });
 
     test('per-ayah hosts all fail → null, no file left behind',
@@ -378,7 +379,7 @@ void main() {
           await Directory.systemTemp.createTemp('v135-ctrl-zip');
       addTearDown(() => tempDir.delete(recursive: true));
       final zipBytes = buildSurahZip(
-        {for (var a = 1; a <= 7; a++) '00100$a.mp3': [a]},
+        {for (var a = 1; a <= 7; a++) '00100$a.mp3': fakeMp3Bytes(fill: a)},
         stored: true,
       );
       final downloads = AudioDownloadService(
@@ -418,7 +419,7 @@ void main() {
           downloads.localAyahFile(reciters[12], 1, 1), isNotNull);
       expect(
           await downloads.localAyahFile(reciters[12], 1, 1)!.readAsBytes(),
-          [1]);
+          fakeMp3Bytes(fill: 1));
     });
 
     test('cache fails: ayah still plays via the per-ayah stream',

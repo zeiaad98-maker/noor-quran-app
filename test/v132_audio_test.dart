@@ -12,6 +12,7 @@ import 'package:noor_quran/data/quran_audio.dart';
 import 'package:noor_quran/widgets/audio_player_sheet.dart';
 
 import 'fake_just_audio.dart';
+import 'fake_mp3.dart';
 
 /// v13.2 audio: the WORD plays FIRST from Quran.com's dedicated
 /// per-word recording (wbw) — one fixed teaching voice, complete and
@@ -108,13 +109,13 @@ void main() {
         if (request.url.host == 'audio.qurancdn.com') {
           return http.Response.bytes([], 404);
         }
-        return http.Response.bytes([9, 8, 7], 200);
+        return http.Response.bytes(fakeMp3Bytes(), 200);
       }));
       addTearDown(service.dispose);
 
       final file = await service.cacheWbwFile(2, 33, 6);
       expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [9, 8, 7]);
+      expect(await file!.readAsBytes(), fakeMp3Bytes());
       expect(requested, [
         'https://resources.surahpedia.com/Word_by-Word/2/002033006.mp3',
       ]);

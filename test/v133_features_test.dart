@@ -80,8 +80,8 @@ void main() {
     tearDown(() async {
       service.dispose();
       await tempDir.delete(recursive: true);
-      AudioDownloadService.stallTimeout = const Duration(seconds: 8);
-      AudioDownloadService.fetchAttempts = 1;
+      AudioDownloadService.stallTimeout = const Duration(seconds: 30);
+      AudioDownloadService.fetchAttempts = 2;
       AudioDownloadService.retryBackoff = const Duration(seconds: 2);
     });
 
@@ -97,12 +97,17 @@ void main() {
 
     test('slow download succeeds even when it outlasts the stall window',
         () async {
-      // 1,000 bytes in 100-byte chunks, 250 ms apart: 2.5 s total,
+      // 2,048 bytes in 100-byte chunks, 250 ms apart: ~5 s total,
       // while the stall window is only 1 s. Bytes keep arriving,
       // so no stall fires — and there is no wall-clock timeout to
       // kill it. (The old code's 15 s per-attempt timeout is gone.)
       AudioDownloadService.stallTimeout = const Duration(seconds: 1);
-      final bytes = List<int>.generate(1000, (i) => i % 256);
+      final bytes = List<int>.generate(2048, (i) => i % 256);
+// v13.16: the served bytes must be a VALID mp3 (>= 1 KB +
+      // ID3 header) or the cache validation rejects them.
+      bytes[0] = 0x49; // 'I'
+      bytes[1] = 0x44; // 'D'
+      bytes[2] = 0x33; // '3'
       final zipBytes =
           buildSurahZip({'002033.mp3': bytes}, stored: true);
       final client = _FakeSlowClient(
@@ -119,11 +124,11 @@ void main() {
         onProgress: (r, t) => progress.add((r, t)),
       );
       expect(file, isNotNull);
-      expect(await file!.length(), 1000);
+      expect(await file!.length(), 2048);
       // v13.7: progress runs over the per-ayah file now (it is
       // tried first) — one download, so it is monotonic and ends
       // at the file's own total.
-      expect(progress.last, (1000, 1000));
+      expect(progress.last, (2048, 2048));
       // Progress really moved (not one jump at the end).
       expect(progress.map((p) => p.$1).toSet().length, greaterThan(5));
       for (var i = 1; i < progress.length; i++) {
@@ -139,7 +144,12 @@ void main() {
       // ends at the file's own total, not a ZIP total (there is
       // no ZIP in the playback path any more).
       AudioDownloadService.stallTimeout = const Duration(seconds: 1);
-      final bytes = List<int>.generate(1000, (i) => i % 256);
+      final bytes = List<int>.generate(2048, (i) => i % 256);
+// v13.16: the served bytes must be a VALID mp3 (>= 1 KB +
+      // ID3 header) or the cache validation rejects them.
+      bytes[0] = 0x49; // 'I'
+      bytes[1] = 0x44; // 'D'
+      bytes[2] = 0x33; // '3'
       final zipBytes =
           buildSurahZip({'002033.mp3': bytes}, stored: true);
       final client = _FakeSlowClient(
@@ -159,8 +169,8 @@ void main() {
         onProgress: (r, t) => progress.add((r, t)),
       );
       expect(file, isNotNull);
-      expect(await file!.length(), 1000);
-      expect(progress.last, (1000, 1000));
+      expect(await file!.length(), 2048);
+      expect(progress.last, (2048, 2048));
       expect(progress.map((p) => p.$1).toSet().length, greaterThan(5));
       for (var i = 1; i < progress.length; i++) {
         expect(progress[i].$1, greaterThanOrEqualTo(progress[i - 1].$1));
@@ -190,7 +200,12 @@ void main() {
       // diagnostic default is 1 attempt, which never retries).
       AudioDownloadService.fetchAttempts = 2;
       AudioDownloadService.retryBackoff = const Duration(milliseconds: 10);
-      final bytes = List<int>.generate(1000, (i) => i % 256);
+      final bytes = List<int>.generate(2048, (i) => i % 256);
+// v13.16: the served bytes must be a VALID mp3 (>= 1 KB +
+      // ID3 header) or the cache validation rejects them.
+      bytes[0] = 0x49; // 'I'
+      bytes[1] = 0x44; // 'D'
+      bytes[2] = 0x33; // '3'
       final client = _FakeSlowClient(
         bytes: bytes,
         zipBytes: buildSurahZip({'002033.mp3': bytes}, stored: true),
@@ -202,7 +217,7 @@ void main() {
       await buildService(client);
       final file = await service.cacheAyahFile(reciters[0], 2, 33);
       expect(file, isNotNull);
-      expect(await file!.length(), 1000);
+      expect(await file!.length(), 2048);
       expect(client.attempts, 2,
           reason: 'attempt 1 cut short, attempt 2 resumed via Range');
       expect(client.sawRange, isTrue);
@@ -215,7 +230,12 @@ void main() {
       // a fallback to the next host instead of a same-URL retry.
       AudioDownloadService.fetchAttempts = 2;
       AudioDownloadService.retryBackoff = const Duration(milliseconds: 10);
-      final bytes = List<int>.generate(400, (i) => i % 256);
+      final bytes = List<int>.generate(2048, (i) => i % 256);
+// v13.16: the served bytes must be a VALID mp3 (>= 1 KB +
+      // ID3 header) or the cache validation rejects them.
+      bytes[0] = 0x49; // 'I'
+      bytes[1] = 0x44; // 'D'
+      bytes[2] = 0x33; // '3'
       final client = _FakeSlowClient(
         bytes: bytes,
         zipBytes: buildSurahZip({'002033.mp3': bytes}, stored: true),
@@ -224,7 +244,7 @@ void main() {
       await buildService(client);
       final file = await service.cacheAyahFile(reciters[0], 2, 33);
       expect(file, isNotNull);
-      expect(await file!.length(), 400);
+      expect(await file!.length(), 2048);
       expect(client.attempts, 2);
     });
 
@@ -259,7 +279,12 @@ void main() {
     });
 
     test('a cached file is reused — no second download', () async {
-      final bytes = List<int>.generate(200, (i) => i % 256);
+      final bytes = List<int>.generate(2048, (i) => i % 256);
+// v13.16: the served bytes must be a VALID mp3 (>= 1 KB +
+      // ID3 header) or the cache validation rejects them.
+      bytes[0] = 0x49; // 'I'
+      bytes[1] = 0x44; // 'D'
+      bytes[2] = 0x33; // '3'
       final client = _FakeSlowClient(
         bytes: bytes,
         zipBytes: buildSurahZip({'002033.mp3': bytes}, stored: true),

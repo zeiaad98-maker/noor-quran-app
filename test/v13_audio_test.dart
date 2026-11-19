@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:noor_quran/data/audio_downloads.dart';
 import 'package:noor_quran/data/quran_audio.dart';
 import 'package:noor_quran/widgets/noor_qcf_page.dart';
+import 'fake_mp3.dart';
 
 /// v13 audio (the user's top priority): pronunciation must be clear,
 /// pure and complete — for the WORD and the AYAH.
@@ -93,14 +94,14 @@ void main() {
       // is never requested here.
       final service = await makeService(MockClient((request) async {
         requested.add(request.url.toString());
-        return http.Response.bytes([9, 8, 7, 6], 200);
+        return http.Response.bytes(fakeMp3Bytes(fill: 9), 200);
       }));
       addTearDown(service.dispose);
       final tunaiji = reciters[12];
 
       final first = await service.cacheAyahFile(tunaiji, 2, 33);
       expect(first, isNotNull);
-      expect(await first!.readAsBytes(), [9, 8, 7, 6]);
+      expect(await first!.readAsBytes(), fakeMp3Bytes(fill: 9));
       expect(requested, [
         'https://resources.surahpedia.com/Khalefa_Al-Tunaiji/002033.mp3',
       ]);
@@ -129,13 +130,13 @@ void main() {
       final requested = <String>[];
       final service = await makeService(MockClient((request) async {
         requested.add(request.url.toString());
-        return http.Response.bytes([1, 2, 3], 200);
+        return http.Response.bytes(fakeMp3Bytes(fill: 1), 200);
       }));
       addTearDown(service.dispose);
 
       final first = await service.cacheWbwFile(2, 33, 4);
       expect(first, isNotNull);
-      expect(await first!.readAsBytes(), [1, 2, 3]);
+      expect(await first!.readAsBytes(), fakeMp3Bytes(fill: 1));
       expect(requested, [
         // v13.6: SurahPedia is tried first, so it answers at once.
         'https://resources.surahpedia.com/Word_by-Word/2/002033004.mp3',
