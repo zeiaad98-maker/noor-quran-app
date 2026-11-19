@@ -694,17 +694,52 @@ class AudioPlayerController extends ChangeNotifier {
           isCancelled: () => token != _playToken,
         );
         if (token != _playToken || _disposed) return;
-        // Bounded: the old bare setUrl could hang forever on a
-        // stalled connection, leaving the spinner up with no sound
-        // and no error.
+        // v13.16: a cached file that will not play is a POISONED
+        // cache entry (a partial/corrupt file from an old stalled
+        // download, reused forever because the cache trusted any
+        // existing file) — delete it and fall through to
+        // streaming instead of erroring out. The error is
+        // reported only when streaming fails on every URL too.
+        // The file's size is recorded in the diagnostic: a 0-byte
+        // or few-hundred-byte file is the smoking gun.
+        var played = false;
         if (local != null) {
-          await _player
-              .setFilePath(local.path)
-              .timeout(const Duration(seconds: 20));
-          if (token != _playToken || _disposed) return;
-          await _player.setSpeed(speed).timeout(const Duration(seconds: 5));
-          await _player.play().timeout(const Duration(seconds: 10));
-        } else {
+          try {
+            await _player
+                .setFilePath(local.path)
+                .timeout(const Duration(seconds: 20));
+            if (token != _playToken || _disposed) return;
+            await _player.setSpeed(speed).timeout(const Duration(seconds: 5));
+            await _player.play().timeout(const Duration(seconds: 10));
+            played = true;
+          } catch (e) {
+            // A superseded attempt's failure is not the file's
+            // fault (v13.2 bug 2): the load was abandoned by
+            // stop() / a newer play, so the file stays.
+            if (token != _playToken || _disposed) return;
+            var size = -1;
+            try {
+              size = local.lengthSync();
+            } catch (_) {}
+            lastStreamError =
+                'play — $size bytes — ${e.runtimeType}: $e';
+            try {
+              await local.delete();
+            } catch (_) {}
+            // v13.16: the failed play() left just_audio's
+            // `playing` stuck true (it is set before the platform
+            // call and never reverted on error) — the streaming
+            // fallback below would then return at once ("if
+            // (playing) return") without playing anything, while
+            // the position extrapolates past the check, faking a
+            // success with no sound. Stop resets the flag so the
+            // fallback really plays.
+            try {
+              await _player.stop();
+            } catch (_) {}
+          }
+        }
+        if (!played) {
           // Streaming fallback (v13.12 — the user's correction,
           // 2026-11-18): Wahy plays ONE ayah directly, without
           // the whole surah — and the word path already streams
@@ -752,9 +787,9 @@ class AudioPlayerController extends ChangeNotifier {
       // abandoned by stop() / a newer play, and just_audio reports
       // the cancelled load as an error — swallowing it keeps stop()
       // silent instead of flashing a bogus "check your internet".
-      // v13.15: a timeout outside _loadAndPlay (e.g. the local
-      // setFilePath) still deserves a recorded cause — keep the
-      // more specific stream error when one exists.
+      // v13.15: a timeout outside _loadAndPlay (e.g. the word
+      // path) still deserves a recorded cause — keep the more
+      // specific stream error when one exists.
       if (token == _playToken) {
         lastStreamError ??= 'play — TimeoutException: $e';
         _reportError(_playCurrent);
@@ -871,9 +906,18 @@ class AudioPlayerController extends ChangeNotifier {
       if (!moved) {
         // v13.15: the load "succeeded" but the position never
         // moved — a buffering stall, not a play. Record it.
+        // v13.16: first failure wins (??=) — a local-file failure
+        // recorded earlier in this attempt (the poisoned cache)
+        // must not be overwritten by a later stream failure.
+        // The stalled play also left `playing` stuck true —
+        // reset it (see the catch below) so the next URL really
+        // plays instead of faking success by extrapolation.
         if (token == _playToken) {
-          lastStreamError = 'local ${file.path} — stall: position never '
-              'moved (buffering, 6s)';
+          lastStreamError ??= 'local ${file.path} — stall: position '
+              'never moved (buffering, 6s)';
+          try {
+            await _player.stop();
+          } catch (_) {}
         }
         return false;
       }
@@ -884,8 +928,21 @@ class AudioPlayerController extends ChangeNotifier {
     } catch (e) {
       // v13.15: record the real local-load error (corrupt file,
       // setFilePath timeout, ...) instead of swallowing it.
+      // v13.16: the file proved unplayable — delete it (same
+      // poisoned-cache rule as the ayah path) so the next tap
+      // re-downloads it instead of failing on it again. Only for
+      // the current attempt: a superseded load's failure is not
+      // the file's fault. The failed play() also left `playing`
+      // stuck true — reset it (see [_loadAndPlay]) so the
+      // streaming fallback below really plays.
       if (token == _playToken) {
-        lastStreamError = 'local ${file.path} — ${e.runtimeType}: $e';
+        lastStreamError ??= 'local ${file.path} — ${e.runtimeType}: $e';
+        try {
+          await file.delete();
+        } catch (_) {}
+        try {
+          await _player.stop();
+        } catch (_) {}
       }
       return false;
     }
@@ -916,9 +973,16 @@ class AudioPlayerController extends ChangeNotifier {
         // moved — a buffering stall, not a play. Record it: on the
         // user's phone this is indistinguishable from a load
         // failure, and the generic error hides which one it was.
+        // v13.16: first failure wins (??=) — see [_loadLocal].
+        // The stalled play also left `playing` stuck true —
+        // reset it (see the catch below) so the next URL really
+        // plays instead of faking success by extrapolation.
         if (token == _playToken) {
-          lastStreamError = '$url — stall: position never moved '
+          lastStreamError ??= '$url — stall: position never moved '
               '(buffering, 6s)';
+          try {
+            await _player.stop();
+          } catch (_) {}
         }
         return false;
       }
@@ -930,8 +994,19 @@ class AudioPlayerController extends ChangeNotifier {
       // v13.15: record the real load error instead of swallowing
       // it — setUrl/play timeouts and PlayerExceptions are exactly
       // what the five failed versions hid.
+      // v13.16: first failure wins (??=) — see [_loadLocal].
+      // A failed play() leaves just_audio's `playing` stuck true
+      // (set before the platform call, never reverted on error):
+      // the next URL's play() would return at once without
+      // playing anything, while the position extrapolates past
+      // the check — a silent false success. Stop resets the flag
+      // so the next attempt really plays. Only for the current
+      // attempt: a superseded load must not stop the newer play.
       if (token == _playToken) {
-        lastStreamError = '$url — ${e.runtimeType}: $e';
+        lastStreamError ??= '$url — ${e.runtimeType}: $e';
+        try {
+          await _player.stop();
+        } catch (_) {}
       }
       return false;
     }
