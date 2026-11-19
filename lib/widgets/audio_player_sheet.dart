@@ -217,7 +217,7 @@ class AudioPlayerSheet extends StatelessWidget {
                 // tell the installed version apart).
                 const SizedBox(height: 12),
                 Text(
-                  'الإصدار 1.0.29',
+                  'الإصدار 1.0.30',
                   textAlign: TextAlign.center,
                   style: GoogleFonts.amiri(fontSize: 11, color: Colors.grey),
                 ),
