@@ -41,6 +41,9 @@ import 'fake_just_audio.dart';
 ///   path ([ayahStreamUrlsInOrder]): on a cache failure the ayah
 ///   streams from www, then the alternates, then islamic.network,
 ///   bare last — instead of only the bare URL (blocked from Syria).
+///   v13.13: SurahPedia is now first in this list too, for the 15
+///   mapped reciters (العجمي unchanged) — the pins below were
+///   updated to the new order; their substance is untouched.
 /// No real HTTP is made except the one live test at the bottom,
 /// which skips gracefully when the network is unavailable.
 void main() {
@@ -196,6 +199,7 @@ void main() {
       expect(file, isNotNull);
       expect(await file!.readAsBytes(), [9, 9]);
       expect(requested, [
+        'https://resources.surahpedia.com/Minshawy_Mujawwad/002255.mp3',
         'http://www.everyayah.com/data/Minshawy_Mujawwad_64kbps/002255.mp3',
         'https://huggingface.co/datasets/maqra-project/mohamed-siddiq-al-minshawi-mujawwad-64kbps/resolve/main/002255.mp3',
       ]);
@@ -227,6 +231,7 @@ void main() {
       expect(file, isNotNull);
       expect(await file!.readAsBytes(), [4, 4]);
       expect(requested, [
+        'https://resources.surahpedia.com/Minshawy_Mujawwad/002255.mp3',
         'http://www.everyayah.com/data/Minshawy_Mujawwad_64kbps/002255.mp3',
         'https://huggingface.co/datasets/maqra-project/mohamed-siddiq-al-minshawi-mujawwad-64kbps/resolve/main/002255.mp3',
         'https://alfurqan.online/api/v1/audio/minshawy-mujawwad/surah/2/ayah/255',
@@ -250,6 +255,7 @@ void main() {
       expect(file, isNotNull);
       expect(await file!.readAsBytes(), [2, 2]);
       expect(requested, [
+        'https://resources.surahpedia.com/Husary/112002.mp3',
         'http://www.everyayah.com/data/Husary_64kbps/112002.mp3',
         'https://cdn.islamic.network/quran/audio/64/ar.husary/6223.mp3',
         'https://mirrors.quranicaudio.com/everyayah/Husary_64kbps/112002.mp3',
@@ -430,9 +436,11 @@ void main() {
   });
 
   group('ayahStreamUrlsInOrder — single-ayah stream (v13.12)', () {
-    test('order pins: www, alternates, islamic.network, bare', () {
-      // Husary (islamic.network mapped): 5 hosts.
+    test('order pins: SurahPedia, www, alternates, islamic.network, '
+        'bare', () {
+      // Husary (islamic.network mapped): 6 hosts.
       expect(ayahStreamUrlsInOrder(husary, 2, 255), [
+        'https://resources.surahpedia.com/Husary/002255.mp3',
         'http://www.everyayah.com/data/Husary_64kbps/002255.mp3',
         'https://mirrors.quranicaudio.com/everyayah/Husary_64kbps/002255.mp3',
         'https://huggingface.co/datasets/maqra-project/mahmoud-al-husary-murattal-64kbps/resolve/main/002255.mp3',
@@ -440,32 +448,42 @@ void main() {
         'https://everyayah.com/data/Husary_64kbps/002255.mp3',
       ]);
       // Minshawi (NO islamic.network step — murattal under a
-      // mujawwad name): 4 hosts, Maqra then Al Furqan.
+      // mujawwad name): 5 hosts, Maqra then Al Furqan.
       expect(ayahStreamUrlsInOrder(minshawi, 2, 255), [
+        'https://resources.surahpedia.com/Minshawy_Mujawwad/002255.mp3',
         'http://www.everyayah.com/data/Minshawy_Mujawwad_64kbps/002255.mp3',
         'https://huggingface.co/datasets/maqra-project/mohamed-siddiq-al-minshawi-mujawwad-64kbps/resolve/main/002255.mp3',
         'https://alfurqan.online/api/v1/audio/minshawy-mujawwad/surah/2/ayah/255',
         'https://everyayah.com/data/Minshawy_Mujawwad_64kbps/002255.mp3',
       ]);
-      // Tunaiji (no islamic.network per-ayah): 4 hosts.
+      // Tunaiji (no islamic.network per-ayah): 5 hosts.
       final tunaiji =
           reciters.firstWhere((r) => r.name == 'خليفة الطنيجي');
       expect(ayahStreamUrlsInOrder(tunaiji, 7, 1), [
+        'https://resources.surahpedia.com/Khalefa_Al-Tunaiji/007001.mp3',
         'http://www.everyayah.com/data/khalefa_al_tunaiji_64kbps/007001.mp3',
         'https://verses.quran.com/Tunaiji/mp3/007001.mp3',
         'https://huggingface.co/datasets/maqra-project/khalifa-al-tunaiji-64kbps/resolve/main/007001.mp3',
         'https://everyayah.com/data/khalefa_al_tunaiji_64kbps/007001.mp3',
       ]);
-      // Every reciter streams from at least www + 2 alternates +
-      // bare (4 hosts), plus islamic.network when mapped (5).
+      // Every mapped reciter streams from SurahPedia first, then
+      // www + 2 alternates + bare (5 hosts), plus islamic.network
+      // when mapped (6). العجمي has no SurahPedia folder: www
+      // first, 5 hosts (v13.12 order unchanged).
       for (final reciter in reciters) {
         final urls = ayahStreamUrlsInOrder(reciter, 2, 255);
-        expect(urls.length,
-            islamicNetworkUrl(reciter, 2, 255) == null ? 4 : 5,
-            reason: reciter.name);
-        expect(urls.first,
-            startsWith('http://www.everyayah.com/'),
-            reason: reciter.name);
+        final sp = surahpediaAyahUrl(reciter, 2, 255);
+        if (sp == null) {
+          expect(urls.first,
+              startsWith('http://www.everyayah.com/'),
+              reason: reciter.name);
+          expect(urls.length, 5, reason: reciter.name);
+        } else {
+          expect(urls.first, sp, reason: reciter.name);
+          expect(urls.length,
+              islamicNetworkUrl(reciter, 2, 255) == null ? 5 : 6,
+              reason: reciter.name);
+        }
         expect(urls.last,
             startsWith('https://everyayah.com/'),
             reason: reciter.name);
@@ -505,7 +523,8 @@ void main() {
       }
     });
 
-    test('cache fails: streams www, then alts in order', () async {
+    test('cache fails: streams SurahPedia, www, then alts in order',
+        () async {
       AudioDownloadService.fetchAttempts = 1;
       // The cache fails on every host (all 404s).
       final service = await makeService(MockClient((request) async {
@@ -515,15 +534,20 @@ void main() {
       final controller = AudioPlayerController(downloads: service);
       addTearDown(controller.dispose);
       controller.reciterIndex = 0; // الحصري
-      // www + mirror loads fail at the fake platform; Maqra plays.
-      fake.failLoadSubstrings
-          .addAll(['www.everyayah.com', 'mirrors.quranicaudio.com']);
+      // SurahPedia + www + mirror loads fail at the fake platform;
+      // Maqra plays.
+      fake.failLoadSubstrings.addAll([
+        'resources.surahpedia.com',
+        'www.everyayah.com',
+        'mirrors.quranicaudio.com',
+      ]);
 
       await controller.playAyah(2, 33);
 
       expect(controller.lastError, isNull);
       expect(fake.player.playing, isTrue);
       expect(fake.loadUris, [
+        'https://resources.surahpedia.com/Husary/002033.mp3',
         'http://www.everyayah.com/data/Husary_64kbps/002033.mp3',
         'https://mirrors.quranicaudio.com/everyayah/Husary_64kbps/002033.mp3',
         'https://huggingface.co/datasets/maqra-project/mahmoud-al-husary-murattal-64kbps/resolve/main/002033.mp3',
@@ -541,6 +565,7 @@ void main() {
       addTearDown(controller.dispose);
       controller.reciterIndex = 0; // الحصري
       fake.failLoadSubstrings.addAll([
+        'surahpedia',
         'everyayah',
         'mirrors.quranicaudio.com',
         'huggingface.co',
@@ -552,9 +577,10 @@ void main() {
 
       expect(controller.lastError, isNotNull);
       expect(controller.isPlaying, isFalse);
-      // All 5 hosts were attempted, none played.
-      expect(fake.loadCount, loadsBefore + 5);
-      expect(fake.loadUris.sublist(fake.loadUris.length - 5), [
+      // All 6 hosts were attempted, none played.
+      expect(fake.loadCount, loadsBefore + 6);
+      expect(fake.loadUris.sublist(fake.loadUris.length - 6), [
+        'https://resources.surahpedia.com/Husary/002033.mp3',
         'http://www.everyayah.com/data/Husary_64kbps/002033.mp3',
         'https://mirrors.quranicaudio.com/everyayah/Husary_64kbps/002033.mp3',
         'https://huggingface.co/datasets/maqra-project/mahmoud-al-husary-murattal-64kbps/resolve/main/002033.mp3',

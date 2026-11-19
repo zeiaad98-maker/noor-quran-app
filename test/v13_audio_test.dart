@@ -88,7 +88,7 @@ void main() {
 
     test('cacheAyahFile downloads once, replays from disk', () async {
       final requested = <String>[];
-      // v13.7: the per-ayah file over the www host goes first —
+      // v13.13: the per-ayah file over SurahPedia goes first —
       // v13.12: the ZIP is not in the playback path at all, so it
       // is never requested here.
       final service = await makeService(MockClient((request) async {
@@ -102,7 +102,7 @@ void main() {
       expect(first, isNotNull);
       expect(await first!.readAsBytes(), [9, 8, 7, 6]);
       expect(requested, [
-        'http://www.everyayah.com/data/khalefa_al_tunaiji_64kbps/002033.mp3',
+        'https://resources.surahpedia.com/Khalefa_Al-Tunaiji/002033.mp3',
       ]);
       // The player sees the same file through the sync accessor.
       expect(service.localAyahFile(tunaiji, 2, 33)?.path, first.path);

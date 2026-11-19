@@ -18,7 +18,10 @@ import 'package:noor_quran/data/quran_audio.dart';
 /// same position islamic.network occupies for the 12. The
 /// radical fix extends the same mechanism to ALL 16 reciters —
 /// see test/v1312_all_reciters_fallback_test.dart for the full
-/// pins. No real HTTP is made in the chain tests (MockClient);
+/// pins. v13.13: SurahPedia is now step 0, before www, for the
+/// 15 mapped reciters (العجمي unchanged) — the chain pins below
+/// were updated to the new order; their substance is untouched.
+/// No real HTTP is made in the chain tests (MockClient);
 /// the one live test at the bottom skips gracefully when the
 /// network is unavailable.
 void main() {
@@ -131,6 +134,7 @@ void main() {
       expect(file, isNotNull);
       expect(await file!.readAsBytes(), [2, 2]);
       expect(requested, [
+        'https://resources.surahpedia.com/Khalefa_Al-Tunaiji/002255.mp3',
         'http://www.everyayah.com/data/khalefa_al_tunaiji_64kbps/002255.mp3',
         'https://verses.quran.com/Tunaiji/mp3/002255.mp3',
       ]);
@@ -158,6 +162,7 @@ void main() {
       expect(file, isNotNull);
       expect(await file!.readAsBytes(), [3, 3]);
       expect(requested, [
+        'https://resources.surahpedia.com/Khalefa_Al-Tunaiji/002255.mp3',
         'http://www.everyayah.com/data/khalefa_al_tunaiji_64kbps/002255.mp3',
         'https://verses.quran.com/Tunaiji/mp3/002255.mp3',
         'https://huggingface.co/datasets/maqra-project/khalifa-al-tunaiji-64kbps/resolve/main/002255.mp3',
@@ -170,6 +175,9 @@ void main() {
       final requested = <String>[];
       final service = await makeService(MockClient((request) async {
         requested.add(request.url.toString());
+        if (request.url.host == 'resources.surahpedia.com') {
+          return http.Response.bytes([], 404);
+        }
         if (request.url.host == 'www.everyayah.com') {
           return http.Response.bytes([], 404);
         }
@@ -185,6 +193,7 @@ void main() {
       expect(file, isNotNull);
       expect(await file!.readAsBytes(), [5, 5]);
       expect(requested, [
+        'https://resources.surahpedia.com/Mohammad_al_Tablaway/002255.mp3',
         'http://www.everyayah.com/data/Mohammad_al_Tablaway_64kbps/002255.mp3',
         'https://huggingface.co/datasets/maqra-project/mohammad-al-tablawi-64kbps/resolve/main/002255.mp3',
         'https://mirrors.quranicaudio.com/everyayah/Mohammad_al_Tablaway_128kbps/002255.mp3',
@@ -214,6 +223,7 @@ void main() {
       expect(file, isNotNull);
       expect(await file!.readAsBytes(), [8, 8]);
       expect(requested, [
+        'https://resources.surahpedia.com/Yasser_Ad-Dussary/002255.mp3',
         'http://www.everyayah.com/data/Yasser_Ad-Dussary_128kbps/002255.mp3',
         'https://mirrors.quranicaudio.com/everyayah/Yasser_Ad-Dussary_128kbps/002255.mp3',
       ]);
@@ -225,6 +235,9 @@ void main() {
       final requested = <String>[];
       final service = await makeService(MockClient((request) async {
         requested.add(request.url.toString());
+        if (request.url.host == 'resources.surahpedia.com') {
+          return http.Response.bytes([], 404);
+        }
         if (request.url.host == 'www.everyayah.com') {
           return http.Response.bytes([], 404);
         }
@@ -243,6 +256,7 @@ void main() {
       expect(file, isNotNull);
       expect(await file!.readAsBytes(), [7, 7]);
       expect(requested, [
+        'https://resources.surahpedia.com/Husary/112002.mp3',
         'http://www.everyayah.com/data/Husary_64kbps/112002.mp3',
         'https://cdn.islamic.network/quran/audio/64/ar.husary/6223.mp3',
         'https://mirrors.quranicaudio.com/everyayah/Husary_64kbps/112002.mp3',

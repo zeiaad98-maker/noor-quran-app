@@ -206,10 +206,11 @@ void main() {
       expect(fake.loadUris.last.endsWith('002006.mp3'), isTrue);
       expect(fake.loadUris.last.startsWith('http'), isFalse);
       // The preload fetched each ayah exactly once, in page order.
+      // v13.13: SurahPedia is tried first, so it answers at once.
       expect(
           requested,
           List.generate(11,
-              (i) => 'http://www.everyayah.com/data/Hani_Rifai_64kbps/0020${(6 + i).toString().padLeft(2, '0')}.mp3'));
+              (i) => 'https://resources.surahpedia.com/Hani_Rifai/0020${(6 + i).toString().padLeft(2, '0')}.mp3'));
     });
 
     test('one ayah fails: no sound at all, error reported', () async {
