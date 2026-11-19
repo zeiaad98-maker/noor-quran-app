@@ -36,7 +36,13 @@ import 'fake_just_audio.dart';
 ///   the fast path collects the missing ayahs instead of failing
 ///   on the first one, then the full per-ayah chain runs ONCE MORE
 ///   for the missing ayahs only; only ayahs STILL missing fail
-///   the page. No ZIP in playback, ever.
+///   the preload (the service still returns false then). v13.14:
+///   a failed preload no longer GATES playPages — it falls through
+///   to _playCurrent and streams ayah-by-ayah through the native
+///   player (the user's phone fails every Dart download). The
+///   "all hosts fail on both passes" playPages test pins the new
+///   behaviour; the preloadAyahs service test still pins false.
+///   No ZIP in playback, ever.
 /// * Part 3 — single-ayah streaming fallback, mirroring the word
 ///   path ([ayahStreamUrlsInOrder]): on a cache failure the ayah
 ///   streams from www, then the alternates, then islamic.network,
@@ -415,8 +421,8 @@ void main() {
       expect(requested.any((u) => u.contains('/zips/')), isFalse);
     });
 
-    test('page 2: all hosts fail on both passes — no sound at all, '
-        'error reported', () async {
+    test('page 2: all hosts fail on both passes — preload fails, '
+        'page still plays via the native stream (v13.14)', () async {
       AudioDownloadService.fetchAttempts = 1;
       final service = await makeService(MockClient((request) async {
         return http.Response.bytes([], 404);
@@ -429,9 +435,16 @@ void main() {
       final loadsBefore = fake.loadCount;
       await controller.playPages(2, 2);
 
-      expect(controller.lastError, isNotNull);
-      expect(fake.loadCount, loadsBefore,
-          reason: 'no sound before the page is whole');
+      // v13.14: the failed preload no longer gates playback — the
+      // page falls through to _playCurrent, which streams the
+      // first ayah through the native player (every Dart download
+      // failed, so nothing is cached).
+      expect(controller.lastError, isNull);
+      expect(fake.player.playing, isTrue);
+      expect(controller.currentAyah, (2, 1));
+      expect(fake.loadCount, loadsBefore + 1);
+      expect(fake.loadUris.last,
+          'https://resources.surahpedia.com/Husary/002001.mp3');
     });
   });
 

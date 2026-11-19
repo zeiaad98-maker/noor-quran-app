@@ -342,6 +342,14 @@ class AudioPlayerController extends ChangeNotifier {
     // surah). Cached ayahs return at once, so a replay / retry
     // costs nothing. stop() aborts the preload via the token
     // (see stop()).
+    // v13.14 — the preload is still ATTEMPTED first (a fully
+    // cached page plays from local files, exactly as before), but
+    // it is no longer a GATE: when it fails, playback falls
+    // through to [_playCurrent] instead of erroring out. The
+    // user's phone fails EVERY Dart http download, so the gate
+    // meant the page scope never played at all — while the ayah
+    // scope streams fine through the native player. See the
+    // fall-through below.
     final token = ++_playToken;
     lastError = null;
     isLoading = true;
@@ -358,11 +366,20 @@ class AudioPlayerController extends ChangeNotifier {
     }
     if (token != _playToken || _disposed) return;
     if (!preloaded) {
+      // v13.14 — fall through to _playCurrent() instead of
+      // reporting the error: the preload gate was the single point
+      // of failure on the user's phone. His phone fails EVERY Dart
+      // http download (all hosts, all versions), so the page scope
+      // NEVER played — it errored without ever trying the native
+      // player. _playCurrent plays ayah-by-ayah from the cache when
+      // present and otherwise streams each ayah through the native
+      // player (ExoPlayer, the path SurahApp/Wahy use), trying
+      // every host in order — and reports the error itself if the
+      // first ayah fails on every path. The spinner state is
+      // reset here first; _playCurrent sets its own loading state.
       isLoading = false;
       downloadProgress = null;
       notifyListeners();
-      _reportError(() => playPages(from, to));
-      return;
     }
     await _playCurrent();
   }

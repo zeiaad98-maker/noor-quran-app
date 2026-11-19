@@ -190,6 +190,17 @@ class AudioPlayerSheet extends StatelessWidget {
                     ),
                   ),
                 ],
+                // v13.14: tiny version label at the very bottom — the
+                // user's next screenshot proves which version is
+                // actually installed (v13.13 failed on his phone the
+                // same way as v13.12, and the screenshot could not
+                // tell the installed version apart).
+                const SizedBox(height: 12),
+                Text(
+                  'الإصدار 1.0.26',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.amiri(fontSize: 11, color: Colors.grey),
+                ),
               ],
             ),
           ),
