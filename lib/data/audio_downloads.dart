@@ -135,15 +135,22 @@ class AudioDownloadService extends ChangeNotifier {
   /// there is NO whole-surah ZIP anywhere in the playback path.
   /// The ZIP lives ONLY in the explicit bulk download the user
   /// starts himself from «تحميل التلاوات» ([downloadSurahs] /
-  /// [_downloadSurahZip]). The chain: www per-ayah first
+  /// [_downloadSurahZip]). The chain (v13.13): SurahPedia
+  /// per-ayah first ([surahpediaAyahUrl] — SurahApp's own host,
+  /// the one that demonstrably works from his Syrian network
+  /// while everyayah / islamic.network / Maqra / mirrors fail
+  /// there; the same everyayah recordings, byte-identical on
+  /// sampled ayahs — only the host is new); www per-ayah second
   /// ([everyayahWwwUrl] — same host as the ZIP, proven to open
   /// from his network; one small file ~80–160 KB, playback starts
-  /// in seconds); islamic.network per-ayah second for the 12
+  /// in seconds); islamic.network per-ayah third for the 12
   /// reciters with a content-verified edition (a DIFFERENT host,
   /// for when everyayah itself is unreachable); the alternate
-  /// hosts ([altAyahUrls]) third for ALL 16 reciters (v13.12 —
+  /// hosts ([altAyahUrls]) fourth for ALL 16 reciters (v13.12 —
   /// two verified hosts each: mirrors / Maqra / verses.quran.com /
-  /// Al Furqan); bare-HTTPS per-ayah last.
+  /// Al Furqan); bare-HTTPS per-ayah last. العجمي has no
+  /// SurahPedia folder, so his chain starts at step 1 — the
+  /// v13.12 chain unchanged.
   /// Returns the file, or null when the download fails (the player
   /// then falls back to streaming). Never throws. [onProgress] /
   /// [isCancelled] are forwarded to the streamed download (v13.3).
@@ -160,6 +167,24 @@ class AudioDownloadService extends ChangeNotifier {
     if (dir == null) return null;
     final file = File('${dir.path}/${reciter.everyayah}/'
         '${ayahFileName(surah, ayah)}.mp3');
+    // 0. SurahPedia per-ayah (v13.13) — FIRST for the 15 mapped
+    // reciters: SurahApp's own host (resources.surahpedia.com),
+    // the one that demonstrably works from his Syrian network
+    // while everyayah / islamic.network / Maqra / mirrors fail
+    // there. Same everyayah recordings, byte-identical on sampled
+    // ayahs — only the host is new. Null for العجمي (no folder
+    // on SurahPedia), whose chain starts at step 1 as before.
+    final surahpediaUrl = surahpediaAyahUrl(reciter, surah, ayah);
+    if (surahpediaUrl != null &&
+        await _fetchToFile(
+          surahpediaUrl,
+          file,
+          onProgress: onProgress,
+          isCancelled: isCancelled,
+        )) {
+      return localAyahFile(reciter, surah, ayah);
+    }
+    if (isCancelled?.call() ?? false) return null;
     // 1. Per-ayah over the www host (v13.7) — one small file,
     // playback starts in seconds.
     if (await _fetchToFile(
@@ -239,8 +264,8 @@ class AudioDownloadService extends ChangeNotifier {
   /// lines, complete, WITHOUT downloading the whole surah; the
   /// ZIP lives only in the explicit bulk download):
   /// 1. Fast path — [cacheAyahFile] one small file at a time over
-  ///    all hosts (www → islamic.network → the 2 alternate hosts
-  ///    → bare). The missing ayahs are collected, not failed on:
+  ///    all hosts (SurahPedia → www → islamic.network → the 2
+  ///    alternate hosts → bare). The missing ayahs are collected, not failed on:
   ///    the v13.11 preload failed the WHOLE page on the FIRST
   ///    failed ayah, so one bad file killed a page even when the
   ///    other ayahs were already cached.

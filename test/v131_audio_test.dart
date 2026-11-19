@@ -221,7 +221,7 @@ void main() {
       await controller.replayCurrent();
 
       expect(fake.loadCount, 1);
-      expect(fake.loadUris.single, contains('khalefa_al_tunaiji_64kbps'));
+      expect(fake.loadUris.single, contains('Khalefa_Al-Tunaiji'));
       expect(fake.loadUris.single, isNot(contains('Husary')));
       expect(controller.lastError, isNull);
     });

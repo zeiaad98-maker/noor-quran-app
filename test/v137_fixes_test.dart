@@ -67,7 +67,8 @@ void main() {
           'http://www.everyayah.com/data/Husary_64kbps/112002.mp3');
     });
 
-    test('www per-ayah first: no ZIP request at all', () async {
+    test('SurahPedia per-ayah first: no ZIP request at all (v13.13)',
+        () async {
       final requested = <String>[];
       service = await buildService(MockClient((request) async {
         requested.add(request.url.toString());
@@ -78,12 +79,12 @@ void main() {
       expect(file, isNotNull);
       expect(await file!.readAsBytes(), [5, 5, 5]);
       expect(requested, [
-        'http://www.everyayah.com/data/khalefa_al_tunaiji_64kbps/002033.mp3',
+        'https://resources.surahpedia.com/Khalefa_Al-Tunaiji/002033.mp3',
       ]);
     });
 
-    test('www, islamic, alternates and bare all 404 → null, no ZIP '
-        'request (v13.12)', () async {
+    test('SurahPedia, www, islamic, alternates and bare all 404 → '
+        'null, no ZIP request (v13.13)', () async {
       final requested = <String>[];
       service = await buildService(MockClient((request) async {
         requested.add(request.url.toString());
@@ -97,6 +98,7 @@ void main() {
       // playback fallback — the chain ends at the bare file.
       // Tunaiji has no islamic.network step.
       expect(requested, [
+        'https://resources.surahpedia.com/Khalefa_Al-Tunaiji/002033.mp3',
         'http://www.everyayah.com/data/khalefa_al_tunaiji_64kbps/002033.mp3',
         'https://verses.quran.com/Tunaiji/mp3/002033.mp3',
         'https://huggingface.co/datasets/maqra-project/khalifa-al-tunaiji-64kbps/resolve/main/002033.mp3',

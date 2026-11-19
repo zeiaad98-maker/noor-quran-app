@@ -271,11 +271,12 @@ void main() {
       fake.autoFinish = false;
       fake.failLoadSubstrings.clear();
       fake.loadDelay = Duration.zero;
-      // v13.12: the ayah stream tries EVERY host in order (www,
-      // the alternates, islamic.network, bare) — all of them must
-      // fail for the error to show (Tunaiji: www + verses + Maqra
-      // + bare).
+      // v13.13: the ayah stream tries EVERY host in order
+      // (SurahPedia, www, the alternates, islamic.network, bare)
+      // — all of them must fail for the error to show (Tunaiji:
+      // SurahPedia + www + verses + Maqra + bare).
       fake.failLoadSubstrings.addAll([
+        'surahpedia',
         'everyayah',
         'verses.quran.com',
         'huggingface.co',

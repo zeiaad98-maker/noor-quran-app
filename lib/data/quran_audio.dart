@@ -257,6 +257,55 @@ String? islamicNetworkUrl(Reciter reciter, int surah, int ayah) {
       '${globalAyahNumber(surah, ayah)}.mp3';
 }
 
+/// Per-ayah mp3 of [reciter] from SurahPedia (v13.13) — the host
+/// SurahApp itself uses, so the one that demonstrably works from
+/// the user's Syrian network while everyayah / islamic.network /
+/// Maqra / mirrors keep failing on his phone there (v13.12, same
+/// «تعذّر تحميل الصوت», Husary page 2). The bucket is public, no
+/// auth: `https://resources.surahpedia.com/{Folder}/{SSSAAA}.mp3`
+/// — the folder names are SurahApp's own bundled
+/// `ReciterInfo.recitationDirectory` values, verified by CONTENT
+/// 2026-11-18 (report at ~/workspace/noor-quran-v1/
+/// reciter-alt-servers/surahpedia-audio-pattern.md): Husary
+/// 002001.mp3 is byte-identical to everyayah Husary_64kbps
+/// 002001.mp3 (SHA256 d822f6530…); Hani Rifai 2:1 and 7:1
+/// byte-identical; Tunaiji/Tablawi/Dosari 2:255 transcribed as
+/// Ayat al-Kursi. The files are the SAME everyayah recordings —
+/// only the host is new, which is exactly what matters for Syria.
+/// First step of [AudioDownloadService.cacheAyahFile] and of
+/// [ayahStreamUrlsInOrder] for the 15 mapped reciters. Null for
+/// العجمي: SurahPedia has NO folder for him (full bucket listing
+/// checked; guesses Ajmi / Ahmed_Ajami / Ahmad_Ajami / Ajamy /
+/// Ahmed_bin_Ali_Al-Ajmi all 404) — he keeps the v13.12 chain
+/// unchanged, and no folder is invented for him. Whole-surah
+/// files ({Folder}/{SSS}.mp3) exist for most reciters but are a
+/// DIFFERENT slower take (Husary Baqarah 191 MB) — they are NEVER
+/// used in playback and never sliced with per-ayah timings; page
+/// preload uses per-ayah files only.
+String? surahpediaAyahUrl(Reciter reciter, int surah, int ayah) {
+  const folders = {
+    'Husary_64kbps': 'Husary',
+    'Alafasy_64kbps': 'Alafasy',
+    'Minshawy_Mujawwad_64kbps': 'Minshawy_Mujawwad',
+    'Abdul_Basit_Murattal_64kbps': 'Abdul_Basit_Murattal',
+    'Maher_AlMuaiqly_64kbps': 'Maher_Al-Muaiqly',
+    'Hudhaify_64kbps': 'Hudhaify',
+    'Abu_Bakr_Ash-Shaatree_64kbps': 'Abu_Bakr_Ash-Shatree',
+    'Ayman_Sowaid_64kbps': 'Ayman_Suwaid',
+    'Saood_ash-Shuraym_64kbps': 'Saood_Ash-Shuraim',
+    'Abdurrahmaan_As-Sudais_64kbps': 'Abdurrahmaan_As-Sudais',
+    'Hani_Rifai_64kbps': 'Hani_Rifai',
+    'Ibrahim_Akhdar_32kbps': 'Ibrahim_Al-kdar',
+    'khalefa_al_tunaiji_64kbps': 'Khalefa_Al-Tunaiji',
+    'Mohammad_al_Tablaway_64kbps': 'Mohammad_al_Tablaway',
+    'Yasser_Ad-Dussary_128kbps': 'Yasser_Ad-Dussary',
+  };
+  final folder = folders[reciter.everyayah];
+  if (folder == null) return null;
+  return 'https://resources.surahpedia.com/$folder/'
+      '${ayahFileName(surah, ayah)}.mp3';
+}
+
 /// Alternate per-ayah hosts for ALL 16 reciters (v13.12) — a
 /// DIFFERENT host family from everyayah.com, for when everyayah is
 /// unreachable from the user's Syrian network. Ordered per reciter
@@ -392,15 +441,22 @@ String alFurqanAyahUrl(String slug, int surah, int ayah) =>
 /// downloading the whole surah, and the word path already streams
 /// from every host in order — but the ayah path streamed ONLY the
 /// bare everyayah URL (blocked from Syria) with a 20 s timeout.
-/// Now: www per-ayah first, then the alternate hosts
+/// Now (v13.13): SurahPedia first for the 15 mapped reciters
+/// ([surahpediaAyahUrl] — SurahApp's own host, the one that
+/// works from Syria), then www per-ayah, then the alternate hosts
 /// ([altAyahUrls] — the same Part 1 list), then islamic.network
 /// (when the reciter has a verified edition), bare per-ayah last.
-/// Cache-on-play ([AudioDownloadService.cacheAyahFile]) stays the
-/// primary path — this list is only the streaming fallback on a
-/// cache failure, exactly like the word path
-/// ([wbwWordUrlsInOrder]). Pure, pinned by unit tests.
+/// العجمي has no SurahPedia folder, so his order is the v13.12
+/// one unchanged (www first). Cache-on-play
+/// ([AudioDownloadService.cacheAyahFile]) stays the primary
+/// path — this list is only the streaming fallback on a cache
+/// failure, exactly like the word path ([wbwWordUrlsInOrder]).
+/// Pure, pinned by unit tests.
 List<String> ayahStreamUrlsInOrder(Reciter reciter, int surah, int ayah) {
-  final urls = <String>[everyayahWwwUrl(reciter, surah, ayah)];
+  final urls = <String>[];
+  final surahpediaUrl = surahpediaAyahUrl(reciter, surah, ayah);
+  if (surahpediaUrl != null) urls.add(surahpediaUrl);
+  urls.add(everyayahWwwUrl(reciter, surah, ayah));
   urls.addAll(altAyahUrls(reciter, surah, ayah));
   final islamicUrl = islamicNetworkUrl(reciter, surah, ayah);
   if (islamicUrl != null) urls.add(islamicUrl);
