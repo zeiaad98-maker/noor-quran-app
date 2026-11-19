@@ -132,6 +132,23 @@ class FakeJustAudioPlatform extends JustAudioPlatform {
   /// few real seconds so the watchdog can be observed.
   Duration fakeDuration = const Duration(seconds: 60);
 
+  /// Freeze the playback this long after [FakeAudioPlayerPlatform.play]
+  /// (v13.19 stall-watchdog test): the stream starts (first data
+  /// arrives, the controller's load wait passes) and then freezes
+  /// MID-ITEM — the platform reports `buffering` and the position
+  /// stops moving, exactly like a real mid-ayah stall when the
+  /// network stops delivering and ExoPlayer's buffer drains.
+  /// Zero disables it.
+  Duration freezeAfterPlay = Duration.zero;
+
+  /// URIs that freeze (v13.19): when non-empty, only a load whose
+  /// URI contains one of these substrings freezes after
+  /// [freezeAfterPlay]; when empty, every play freezes. Lets one
+  /// test freeze only SurahPedia (the failover host then plays
+  /// cleanly) and another freeze all hosts (the watchdog must
+  /// fail over through the whole chain, then report the error).
+  final Set<String> freezeSubstrings = {};
+
   FakeAudioPlayerPlatform get player => players.last;
 
   /// Total loads across ALL players created so far (just_audio
@@ -163,6 +180,8 @@ class FakeJustAudioPlatform extends JustAudioPlatform {
       neverBufferSubstrings: neverBufferSubstrings,
       bufferedStep: bufferedStep,
       duration: fakeDuration,
+      freezeAfterPlay: freezeAfterPlay,
+      freezeSubstrings: freezeSubstrings,
     );
     players.add(created);
     return created;
@@ -198,6 +217,8 @@ class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
       this.firstDataDelayBySubstring = const {},
       this.neverBufferSubstrings = const {},
       this.bufferedStep = Duration.zero,
+      this.freezeAfterPlay = Duration.zero,
+      this.freezeSubstrings = const {},
       this.duration = const Duration(seconds: 60)});
 
   final _playbackEvents = StreamController<PlaybackEventMessage>.broadcast();
@@ -236,6 +257,23 @@ class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
   /// see [FakeJustAudioPlatform.bufferedStep]).
   Duration bufferedStep;
 
+  /// Freeze the playback this long after [play] (shared with the
+  /// factory — see [FakeJustAudioPlatform.freezeAfterPlay]).
+  Duration freezeAfterPlay;
+
+  /// URIs that freeze (shared with the factory — see
+  /// [FakeJustAudioPlatform.freezeSubstrings]).
+  final Set<String> freezeSubstrings;
+
+  /// URI of the currently loaded item (set by [load]) — decides
+  /// whether this play freezes (see [freezeSubstrings]).
+  String _currentUri = '';
+
+  /// True once the playback froze mid-item (see [_freezePlayback]):
+  /// no further buffered step advances, so the position and the
+  /// buffered position stay frozen until the next load / seek.
+  bool _frozen = false;
+
   /// True when the loaded URI never buffers (v13.18 silent host).
   bool _silentLoad = false;
 
@@ -270,6 +308,7 @@ class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
 
   Timer? _finishTimer;
   Timer? _moveTimer;
+  Timer? _freezeTimer;
 
   @override
   Stream<PlaybackEventMessage> get playbackEventMessageStream =>
@@ -296,6 +335,8 @@ class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
     _finishTimer = null;
     _moveTimer?.cancel();
     _moveTimer = null;
+    _freezeTimer?.cancel();
+    _freezeTimer = null;
   }
 
   @override
@@ -318,6 +359,7 @@ class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
     // silent host). The first-data delay is resolved per URI so
     // one test can make one host slow and the next fast.
     final uri = message is UriAudioSourceMessage ? message.uri : '';
+    _currentUri = uri;
     _silentLoad = neverBufferSubstrings.any(uri.contains);
     if (uri.startsWith('http')) {
       bufferedPosition = Duration.zero;
@@ -336,6 +378,7 @@ class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
     }
     position = request.initialPosition ?? Duration.zero;
     _seekedSinceLoad = false;
+    _frozen = false;
     // Unblock AudioPlayer._load: it waits for a non-loading state.
     _playbackEvents.add(_event(ProcessingStateMessage.ready));
     return LoadResponse(duration: duration);
@@ -391,7 +434,32 @@ class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
     } else {
       _advanceBufferedStep();
     }
+    // v13.19 — mid-ayah stall: after the stream starts, freeze
+    // the playback (see [_freezePlayback]) — the position and
+    // the buffered position stop moving while `playing` stays
+    // true, exactly like a real stall when the network stops
+    // delivering mid-item. Only when this URI is in
+    // [freezeSubstrings] (or when the set is empty, meaning
+    // every play freezes).
+    if (freezeAfterPlay > Duration.zero &&
+        (freezeSubstrings.isEmpty ||
+            freezeSubstrings.any(_currentUri.contains))) {
+      _freezeTimer = Timer(freezeAfterPlay, _freezePlayback);
+    }
     return PlayResponse();
+  }
+
+  /// Freezes the playback mid-item (see [freezeAfterPlay]): the
+  /// pending advance / finish timers are cancelled and the
+  /// platform reports `buffering` with the current (frozen)
+  /// position and buffered position — just_audio then stops
+  /// extrapolating the position, so the controller sees both
+  /// values frozen below the duration while `playing` stays true.
+  void _freezePlayback() {
+    if (!playing) return;
+    _cancelTimer();
+    _frozen = true;
+    _playbackEvents.add(_event(ProcessingStateMessage.buffering));
   }
 
   /// One buffered advance (see [play]): adds [bufferedStep] (or
@@ -401,7 +469,7 @@ class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
   /// [_firstDataDelay]; once fully buffered, the finish timer
   /// starts (see the class doc).
   void _advanceBufferedStep() {
-    if (!playing) return;
+    if (!playing || _frozen) return;
     if (bufferedStep > Duration.zero) {
       bufferedPosition += bufferedStep;
       if (bufferedPosition > duration) bufferedPosition = duration;

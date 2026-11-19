@@ -210,14 +210,19 @@ void main() {
 
     test('slow-host switch: a host with first data after 20 s is '
         'abandoned after ~2 s for the next host (first data in '
-        '2 s) — audio within ~5 s total', () async {
+        '1 s) — audio within ~4 s total', () async {
       // The user's phone waited ~30 s per ayah on SurahPedia.
       // Now the silent host is abandoned at the 2 s switch and
-      // the next host plays: ~4 s total instead of ~30 s+.
+      // the next host plays: ~3 s total instead of ~30 s+.
+      // NOTE (v13.19): the fast host's first data is 1 s, NOT
+      // exactly 2 s — at exactly the 2 s deadline the switch
+      // timer races the async buffered-event delivery and the
+      // host is abandoned even though its data arrived on time;
+      // the 2 s boundary itself is pinned by the defaults test.
       fake.firstDataDelayBySubstring['surahpedia'] =
           const Duration(seconds: 20);
       fake.firstDataDelayBySubstring['everyayah.com'] =
-          const Duration(seconds: 2);
+          const Duration(seconds: 1);
       final (service, _, requested) =
           await buildService((requested) => MockClient((request) async {
                 requested.add(request.url.toString());
@@ -232,8 +237,8 @@ void main() {
       final elapsed = DateTime.now().difference(started);
 
       // It waited the ~2 s switch window, then the fast host's
-      // ~2 s — well under the old ~30 s per ayah.
-      expect(elapsed, greaterThanOrEqualTo(const Duration(seconds: 3)));
+      // ~1 s — well under the old ~30 s per ayah.
+      expect(elapsed, greaterThanOrEqualTo(const Duration(seconds: 2)));
       expect(elapsed, lessThan(const Duration(seconds: 8)));
       expect(controller.lastError, isNull);
       expect(fake.player.playing, isTrue);
