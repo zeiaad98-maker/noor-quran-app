@@ -78,10 +78,29 @@ class AudioPlayerController extends ChangeNotifier {
   /// failed word tap looked like nothing happening at all).
   String? lastError;
 
+  /// v13.15 (DIAGNOSTIC): the real error behind the last failed
+  /// native-player load ([_loadAndPlay] / [_loadLocal]) — the URL
+  /// plus the exception (`"<url> — <runtimeType>: <message>"`).
+  /// The generic [lastError] never says why; this does. Shown via
+  /// [lastDiagnostic] in the player sheet. Cleared at the start of
+  /// each [_playCurrent] and on a successful load.
+  String? lastStreamError;
+
+  /// v13.15 (DIAGNOSTIC): the detail line shown under [lastError]
+  /// in the player sheet — "stage: real error", e.g.
+  /// `"تشغيل: <url> — PlatformException: ..."` and, when a download
+  /// also failed, `"تنزيل: <host> — ..."`. Set by [_reportError]
+  /// from [lastStreamError] and the download service's
+  /// [AudioDownloadService.lastDownloadError]; null when there is
+  /// nothing to diagnose (e.g. a superseded attempt).
+  String? lastDiagnostic;
+
   /// Retries the item that failed (clears [lastError] first).
   Future<void> retryLastError() async {
     if (lastError == null) return;
     lastError = null;
+    // v13.15: the retry starts a fresh diagnosis.
+    lastDiagnostic = null;
     notifyListeners();
     await _playCurrent();
   }
@@ -640,6 +659,9 @@ class AudioPlayerController extends ChangeNotifier {
     _finishToken = -1;
     if (!isReplay) _itemPlays = 1;
     lastError = null;
+    // v13.15: fresh attempt, fresh diagnosis.
+    lastStreamError = null;
+    lastDiagnostic = null;
     isLoading = true;
     downloadProgress = null;
     _lastNotifiedProgress = -1;
@@ -724,17 +746,29 @@ class AudioPlayerController extends ChangeNotifier {
           );
         }
       }
-    } on TimeoutException {
+    } on TimeoutException catch (e) {
       // A superseded attempt's failure is not the user's error
       // (v13.2 bug 2): the load this attempt was waiting on was
       // abandoned by stop() / a newer play, and just_audio reports
       // the cancelled load as an error — swallowing it keeps stop()
       // silent instead of flashing a bogus "check your internet".
-      if (token == _playToken) _reportError(_playCurrent);
-    } on PlayerException {
-      if (token == _playToken) _reportError(_playCurrent);
-    } catch (_) {
-      if (token == _playToken) _reportError(_playCurrent);
+      // v13.15: a timeout outside _loadAndPlay (e.g. the local
+      // setFilePath) still deserves a recorded cause — keep the
+      // more specific stream error when one exists.
+      if (token == _playToken) {
+        lastStreamError ??= 'play — TimeoutException: $e';
+        _reportError(_playCurrent);
+      }
+    } on PlayerException catch (e) {
+      if (token == _playToken) {
+        lastStreamError ??= 'play — PlayerException: $e';
+        _reportError(_playCurrent);
+      }
+    } catch (e) {
+      if (token == _playToken) {
+        lastStreamError ??= 'play — ${e.runtimeType}: $e';
+        _reportError(_playCurrent);
+      }
     } finally {
       // A stale token's finally must not clear the newer load's
       // spinner (the old code did, so the spinner vanished while
@@ -833,8 +867,26 @@ class AudioPlayerController extends ChangeNotifier {
         await _player.stop();
         return false;
       }
-      return await _waitForPositionBeyond(seekTo);
-    } catch (_) {
+      final moved = await _waitForPositionBeyond(seekTo);
+      if (!moved) {
+        // v13.15: the load "succeeded" but the position never
+        // moved — a buffering stall, not a play. Record it.
+        if (token == _playToken) {
+          lastStreamError = 'local ${file.path} — stall: position never '
+              'moved (buffering, 6s)';
+        }
+        return false;
+      }
+      // Success clears any earlier failed attempt's diagnosis for
+      // this item (v13.15).
+      lastStreamError = null;
+      return true;
+    } catch (e) {
+      // v13.15: record the real local-load error (corrupt file,
+      // setFilePath timeout, ...) instead of swallowing it.
+      if (token == _playToken) {
+        lastStreamError = 'local ${file.path} — ${e.runtimeType}: $e';
+      }
       return false;
     }
   }
@@ -858,8 +910,29 @@ class AudioPlayerController extends ChangeNotifier {
         await _player.stop();
         return false;
       }
-      return await _waitForPositionBeyond(seekTo);
-    } catch (_) {
+      final moved = await _waitForPositionBeyond(seekTo);
+      if (!moved) {
+        // v13.15: the load "succeeded" but the position never
+        // moved — a buffering stall, not a play. Record it: on the
+        // user's phone this is indistinguishable from a load
+        // failure, and the generic error hides which one it was.
+        if (token == _playToken) {
+          lastStreamError = '$url — stall: position never moved '
+              '(buffering, 6s)';
+        }
+        return false;
+      }
+      // Success clears any earlier failed attempt's diagnosis for
+      // this item (v13.15).
+      lastStreamError = null;
+      return true;
+    } catch (e) {
+      // v13.15: record the real load error instead of swallowing
+      // it — setUrl/play timeouts and PlayerExceptions are exactly
+      // what the five failed versions hid.
+      if (token == _playToken) {
+        lastStreamError = '$url — ${e.runtimeType}: $e';
+      }
       return false;
     }
   }
@@ -903,6 +976,20 @@ class AudioPlayerController extends ChangeNotifier {
   void _reportError(Future<void> Function() retry) {
     isPlaying = false;
     lastError = 'تعذّر تحميل الصوت — تحقق من الاتصال وحاول مجدداً';
+    // v13.15 (DIAGNOSTIC): the real cause, shown under the generic
+    // line in the sheet — the stream (native player) error first,
+    // then the download (Dart http) error when one was recorded.
+    // Either may be null (superseded attempt, or a failure with no
+    // recorded cause); the generic line still shows on its own.
+    // The download error is the service's most recent failure —
+    // in the ayah/page/surah path the cache attempt runs in this
+    // same _playCurrent call, just before streaming, so it is the
+    // failure of this very item.
+    final parts = <String>[];
+    if (lastStreamError != null) parts.add('تشغيل: $lastStreamError');
+    final dlError = downloads?.lastDownloadError;
+    if (dlError != null) parts.add('تنزيل: $dlError');
+    lastDiagnostic = parts.isEmpty ? null : parts.join('\n');
     notifyListeners();
     onError?.call(
       'تعذّر تحميل الصوت — تحقق من الاتصال وحاول مجدداً',

@@ -80,8 +80,8 @@ void main() {
     tearDown(() async {
       service.dispose();
       await tempDir.delete(recursive: true);
-      AudioDownloadService.stallTimeout = const Duration(seconds: 30);
-      AudioDownloadService.fetchAttempts = 2;
+      AudioDownloadService.stallTimeout = const Duration(seconds: 8);
+      AudioDownloadService.fetchAttempts = 1;
       AudioDownloadService.retryBackoff = const Duration(seconds: 2);
     });
 
@@ -184,6 +184,11 @@ void main() {
 
     test('an interrupted download resumes from the partial file',
         () async {
+      // This test pins RETRY behavior (same URL, second attempt
+      // with Range) — so it sets the retry count explicitly
+      // instead of relying on the production default (v13.15
+      // diagnostic default is 1 attempt, which never retries).
+      AudioDownloadService.fetchAttempts = 2;
       AudioDownloadService.retryBackoff = const Duration(milliseconds: 10);
       final bytes = List<int>.generate(1000, (i) => i % 256);
       final client = _FakeSlowClient(
@@ -205,6 +210,10 @@ void main() {
 
     test('a 500 on the first attempt is retried and then succeeds',
         () async {
+      // Same as the resume test above: pins the retry count
+      // explicitly — without it the "retry" would silently become
+      // a fallback to the next host instead of a same-URL retry.
+      AudioDownloadService.fetchAttempts = 2;
       AudioDownloadService.retryBackoff = const Duration(milliseconds: 10);
       final bytes = List<int>.generate(400, (i) => i % 256);
       final client = _FakeSlowClient(

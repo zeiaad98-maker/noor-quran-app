@@ -56,6 +56,19 @@ class AudioDownloadService extends ChangeNotifier {
 
   Directory? _baseDir;
 
+  /// v13.15 (DIAGNOSTIC): the last download failure, recorded
+  /// instead of swallowed — five versions (v13.10–v13.14) failed
+  /// on the user's phone with the same generic error and no
+  /// visible cause, because every catch returned false/null and
+  /// the real exception was thrown away. Format:
+  /// `"<host> — <exception runtimeType>: <message>"` (or
+  /// `"<host> — HTTP <code>"` for an answered status, or
+  /// `"<host> — stall: no bytes for <n>s"`). Read by the player
+  /// controller ([AudioPlayerController.lastDiagnostic]) and
+  /// shown in the player sheet under the generic error line.
+  /// "Never throws" still holds — this only records.
+  String? lastDownloadError;
+
   /// Downloaded surahs per reciter index (persisted in prefs).
   final Map<int, Set<int>> _downloadedSurahs = {};
 
@@ -164,7 +177,12 @@ class AudioDownloadService extends ChangeNotifier {
     final existing = localAyahFile(reciter, surah, ayah);
     if (existing != null) return existing;
     final dir = _baseDir;
-    if (dir == null) return null;
+    if (dir == null) {
+      // v13.15: init not finished — a real failure mode, record it
+      // instead of returning null silently.
+      lastDownloadError = 'storage — baseDir null (init not finished)';
+      return null;
+    }
     final file = File('${dir.path}/${reciter.everyayah}/'
         '${ayahFileName(surah, ayah)}.mp3');
     // 0. SurahPedia per-ayah (v13.13) — FIRST for the 15 mapped
@@ -306,6 +324,13 @@ class AudioDownloadService extends ChangeNotifier {
       );
       if (isCancelled?.call() ?? false) return false;
       if (file != null) missing.remove(ayah);
+    }
+    if (missing.isNotEmpty) {
+      // v13.15: the per-ayah chain already recorded the last host
+      // failure in [lastDownloadError]; only note the missing
+      // count when nothing was recorded at all.
+      lastDownloadError ??=
+          'preload — ${missing.length} ayah(s) still missing, no error recorded';
     }
     return missing.isEmpty;
   }
@@ -642,12 +667,17 @@ class AudioDownloadService extends ChangeNotifier {
   /// succeeds — the user's rule is that words must download at ANY
   /// speed, even the slowest. A stalled connection (silence) fails
   /// instead of spinning forever, and the user can cancel any time.
-  /// Mutable so tests can shorten it; production always uses 30 s.
-  static Duration stallTimeout = const Duration(seconds: 30);
+  /// Mutable so tests can shorten it; v13.15 (DIAGNOSTIC,
+  /// TEMPORARY) uses 8 s so a failing download surfaces its error
+  /// in seconds while the real cause is being found — REVERT to
+  /// 30 s in the real fix.
+  static Duration stallTimeout = const Duration(seconds: 8);
 
   /// Attempts per URL (first + retries) and the pause between them.
-  /// Mutable so tests can shorten the backoff.
-  static int fetchAttempts = 2;
+  /// Mutable so tests can shorten the backoff. v13.15 (DIAGNOSTIC,
+  /// TEMPORARY): 1 instead of 2 — one attempt per URL, so the
+  /// error surfaces fast. REVERT to 2 in the real fix.
+  static int fetchAttempts = 1;
   static Duration retryBackoff = const Duration(seconds: 2);
 
   /// One file, streamed (v13.3 — the old whole-body GET with a
@@ -754,6 +784,9 @@ class AudioDownloadService extends ChangeNotifier {
         // 4xx: the server answered definitively — retrying the same
         // request cannot help. 5xx and anything else is transient.
         final code = response.statusCode;
+        // v13.15: record the answered status — a 404/403 is a
+        // definitive failure, not a mystery.
+        lastDownloadError = '${Uri.parse(url).host} — HTTP $code';
         return code >= 400 && code < 500
             ? _FetchOutcome.fatal
             : _FetchOutcome.retryable;
@@ -793,6 +826,10 @@ class AudioDownloadService extends ChangeNotifier {
         stallTimer?.cancel();
         stallTimer = Timer(stallTimeout, () async {
           failed = true;
+          // v13.15: a stall is a real failure mode — record it (no
+          // bytes for a whole stall window), not silence.
+          lastDownloadError = '${Uri.parse(url).host} — stall: no bytes '
+              'for ${stallTimeout.inSeconds}s';
           await sub?.cancel();
           finish(false);
         });
@@ -814,7 +851,11 @@ class AudioDownloadService extends ChangeNotifier {
           onProgress?.call(received, total);
           armStall();
         },
-        onError: (_) {
+        onError: (Object e) {
+          // v13.15: record the stream error (e.g. socket closed
+          // mid-download) instead of swallowing it.
+          lastDownloadError =
+              '${Uri.parse(url).host} — ${e.runtimeType}: $e';
           failed = true;
           finish(false);
         },
@@ -836,7 +877,11 @@ class AudioDownloadService extends ChangeNotifier {
       if (total != null && size != total) return _FetchOutcome.retryable;
       await tmp.rename(file.path);
       return _FetchOutcome.ok;
-    } catch (_) {
+    } catch (e) {
+      // v13.15: record the real exception (DNS, connection refused,
+      // TLS, timeout on headers, ...) — this is the error the
+      // user's phone was hitting invisibly for five versions.
+      lastDownloadError = '${Uri.parse(url).host} — ${e.runtimeType}: $e';
       return _FetchOutcome.retryable;
     } finally {
       stallTimer?.cancel();

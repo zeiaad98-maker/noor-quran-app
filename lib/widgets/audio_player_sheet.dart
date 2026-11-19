@@ -120,10 +120,30 @@ class AudioPlayerSheet extends StatelessWidget {
                               size: 20, color: Colors.red),
                           const SizedBox(width: 8),
                           Expanded(
-                            child: Text(
-                              controller.lastError!,
-                              style: GoogleFonts.amiri(
-                                  fontSize: 14, color: Colors.red),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  controller.lastError!,
+                                  style: GoogleFonts.amiri(
+                                      fontSize: 14, color: Colors.red),
+                                ),
+                                // v13.15 (DIAGNOSTIC): the real error
+                                // behind the generic line — stage +
+                                // exception, so one screenshot shows
+                                // the cause. Temporary: remove with
+                                // the diagnostic fields in the real fix.
+                                if (controller.lastDiagnostic != null)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 4),
+                                    child: Text(
+                                      controller.lastDiagnostic!,
+                                      style: GoogleFonts.amiri(
+                                          fontSize: 11,
+                                          color: Colors.grey),
+                                    ),
+                                  ),
+                              ],
                             ),
                           ),
                           const SizedBox(width: 8),
@@ -190,14 +210,14 @@ class AudioPlayerSheet extends StatelessWidget {
                     ),
                   ),
                 ],
-                // v13.14: tiny version label at the very bottom — the
+                // v13.15: tiny version label at the very bottom — the
                 // user's next screenshot proves which version is
-                // actually installed (v13.13 failed on his phone the
-                // same way as v13.12, and the screenshot could not
+                // actually installed (v13.14 failed on his phone the
+                // same way as v13.13, and the screenshot could not
                 // tell the installed version apart).
                 const SizedBox(height: 12),
                 Text(
-                  'الإصدار 1.0.26',
+                  'الإصدار 1.0.27',
                   textAlign: TextAlign.center,
                   style: GoogleFonts.amiri(fontSize: 11, color: Colors.grey),
                 ),

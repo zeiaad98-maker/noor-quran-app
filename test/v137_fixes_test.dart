@@ -155,8 +155,8 @@ void main() {
     });
 
     tearDown(() {
-      AudioDownloadService.fetchAttempts = 2;
-      AudioDownloadService.stallTimeout = const Duration(seconds: 30);
+      AudioDownloadService.fetchAttempts = 1;
+      AudioDownloadService.stallTimeout = const Duration(seconds: 8);
       AudioDownloadService.retryBackoff = const Duration(seconds: 2);
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(

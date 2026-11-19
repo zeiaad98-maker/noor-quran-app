@@ -248,7 +248,7 @@ void main() {
 
     test('ZIP missing the ayah falls back to per-ayah for it', () async {
       AudioDownloadService.fetchAttempts = 1;
-      addTearDown(() => AudioDownloadService.fetchAttempts = 2);
+      addTearDown(() => AudioDownloadService.fetchAttempts = 1);
       final requested = <String>[];
       // The ZIP holds only 001001 — the other 6 ayahs are not in it.
       final zipBytes = buildSurahZip(
