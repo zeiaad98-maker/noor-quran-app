@@ -12,6 +12,7 @@ import 'package:noor_quran/data/quran_audio.dart';
 import 'package:noor_quran/data/word_meanings.dart';
 
 import 'fake_just_audio.dart';
+import 'fake_mp3.dart';
 
 /// v13.6 step 2 — the Wahy-style word card: what the card is built on.
 ///
@@ -113,7 +114,7 @@ void main() {
       final tempDir = await Directory.systemTemp.createTemp('v136-ctrl');
       addTearDown(() => tempDir.delete(recursive: true));
       final downloads = AudioDownloadService(
-        client: MockClient((_) async => http.Response.bytes([1, 2, 3], 200)),
+        client: MockClient((_) async => http.Response.bytes(fakeMp3Bytes(), 200)),
         storageDir: tempDir,
         prefs: await SharedPreferences.getInstance(),
       );

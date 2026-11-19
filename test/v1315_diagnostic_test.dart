@@ -133,13 +133,13 @@ void main() {
   });
 
   group('diagnostic fast failure (v13.15, TEMPORARY)', () {
-    test('stall timeout is 8s and one attempt per URL', () {
-      // Pins the diagnostic values: a failing download must
-      // surface its error in seconds, not minutes. REVERT to
-      // 30s / 2 in the real fix — and update this test with it.
+    test('stall timeout is 30s and two attempts per URL', () {
+      // v13.16: the diagnostic values are REVERTED — a failing
+      // download must NOT surface fast any more; the user's rule
+      // is that audio downloads at any speed, even the slowest.
       expect(AudioDownloadService.stallTimeout,
-          const Duration(seconds: 8));
-      expect(AudioDownloadService.fetchAttempts, 1);
+          const Duration(seconds: 30));
+      expect(AudioDownloadService.fetchAttempts, 2);
     });
   });
 }

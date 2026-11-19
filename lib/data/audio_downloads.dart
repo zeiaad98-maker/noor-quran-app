@@ -94,12 +94,56 @@ class AudioDownloadService extends ChangeNotifier {
       await _baseDir!.create(recursive: true);
     }
     final prefs = _prefsOverride ?? await SharedPreferences.getInstance();
+    // v13.16: one-time full purge (see [_purgeAudioCache]) — runs
+    // BEFORE the downloaded-surahs state is loaded, so the state
+    // and the files on disk agree afterwards.
+    if (prefs.getBool(_purgeMarker) != true) {
+      await _purgeAudioCache(prefs);
+      await prefs.setBool(_purgeMarker, true);
+    }
     for (var i = 0; i < reciters.length; i++) {
       final saved = prefs.getStringList(_surahsKey(i)) ?? const [];
       _downloadedSurahs[i] =
           saved.map((s) => int.tryParse(s) ?? 0).where((s) => s > 0).toSet();
     }
     notifyListeners();
+  }
+
+  /// Marker for the v13.16 one-time purge — once set, the purge
+  /// never runs again, on any later launch or version.
+  static const _purgeMarker = 'audio_cache_purged_v1316';
+
+  /// v13.16 — ONE-TIME full purge of the audio cache (the user's
+  /// order 2026-11-19: "احذف لي كل شي خربان... ما بدي شي خربان
+  /// لقدام" — delete everything broken, nothing broken ever
+  /// again). On the first run of 1.0.28 the ENTIRE cache goes:
+  /// every reciter folder, every cached ayah/word file, every
+  /// manifest — so playback starts from a 100% clean slate and
+  /// no poisoned file from any earlier version can survive.
+  /// The downloaded-surahs state is cleared with it, so the UI
+  /// never shows "مثبّت" for files that no longer exist. The
+  /// per-file validation ([isValidAudioFile]) stays as the
+  /// permanent guard, so nothing broken can ever come back.
+  /// Best-effort throughout — a file that will not delete is
+  /// skipped, and the marker is set anyway: the validator is
+  /// the backstop for anything left behind. Never throws.
+  Future<void> _purgeAudioCache(SharedPreferences prefs) async {
+    final dir = _baseDir;
+    if (dir != null && await dir.exists()) {
+      try {
+        await for (final entity in dir.list()) {
+          try {
+            await entity.delete(recursive: true);
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+    for (var i = 0; i < reciters.length; i++) {
+      try {
+        await prefs.remove(_surahsKey(i));
+      } catch (_) {}
+    }
+    _downloadedSurahs.clear();
   }
 
   static String _surahsKey(int reciterIndex) => 'audio_dl_surahs_$reciterIndex';
@@ -113,6 +157,47 @@ class AudioDownloadService extends ChangeNotifier {
 
   bool get isDownloading => _job != null && _job!.isDownloading;
 
+  /// v13.16 — a cached audio file is trusted ONLY when it looks
+  /// like a real MP3: at least 1 KB, and its first bytes are an
+  /// MP3 header — an "ID3" tag, or an MPEG frame sync (0xFF
+  /// followed by a byte whose top three bits are set: 0xFB /
+  /// 0xF3 / 0xF2 for the common layer-III variants). A partial
+  /// file from a stalled download (0 bytes, a few hundred bytes)
+  /// or an error page saved as .mp3 ("<html…") fails this check.
+  /// Verified against the real hosts: SurahPedia's Husary
+  /// 002001 starts FF F3, www everyayah's starts ID3, and the
+  /// sampled local MP3s start FF FB or ID3.
+  /// An invalid file is DELETED by [localAyahFile] /
+  /// [localWbwFile] so it is re-downloaded instead of being
+  /// reused forever and blocking the streaming fallback — the
+  /// poisoned-cache failure on the user's phone (v13.10–v13.15:
+  /// same ayahs, same «تعذّر تحميل الصوت», diagnostic
+  /// screenshot 2026-11-19: local play timed out, no download
+  /// error). Never throws.
+  static bool isValidAudioFile(File file) {
+    try {
+      if (!file.existsSync()) return false;
+      if (file.lengthSync() < 1024) return false;
+      final raf = file.openSync(mode: FileMode.read);
+      try {
+        final head = raf.readSync(10);
+        if (head.length < 3) return false;
+        // ID3 tag — accept: a real MP3 container from the hosts.
+        if (head[0] == 0x49 && head[1] == 0x44 && head[2] == 0x33) {
+          return true;
+        }
+        // MPEG frame sync at offset 0.
+        return head.length >= 2 &&
+            head[0] == 0xFF &&
+            (head[1] & 0xE0) == 0xE0;
+      } finally {
+        raf.closeSync();
+      }
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Local file for one ayah, when it was downloaded (sync — the
   /// player calls this on every play). Null when not downloaded or
   /// before [init] finished.
@@ -121,7 +206,17 @@ class AudioDownloadService extends ChangeNotifier {
     if (dir == null) return null;
     final file = File(
         '${dir.path}/${reciter.everyayah}/${ayahFileName(surah, ayah)}.mp3');
-    return file.existsSync() ? file : null;
+    if (!file.existsSync()) return null;
+    // v13.16: an existing file is trusted ONLY when it validates
+    // as a real MP3 (see [isValidAudioFile]) — a partial/corrupt
+    // file is deleted so it is re-downloaded, never reused.
+    if (!isValidAudioFile(file)) {
+      try {
+        file.deleteSync();
+      } catch (_) {}
+      return null;
+    }
+    return file;
   }
 
   /// Local wbw word file, when it was cached (sync). Null when not
@@ -131,7 +226,16 @@ class AudioDownloadService extends ChangeNotifier {
     if (dir == null) return null;
     final file = File(
         '${dir.path}/wbw/${ayahFileName(surah, ayah)}_${fileNumber.toString().padLeft(3, '0')}.mp3');
-    return file.existsSync() ? file : null;
+    if (!file.existsSync()) return null;
+    // v13.16: same validation as [localAyahFile] — a partial /
+    // corrupt word file is deleted so it is re-downloaded.
+    if (!isValidAudioFile(file)) {
+      try {
+        file.deleteSync();
+      } catch (_) {}
+      return null;
+    }
+    return file;
   }
 
 /// Cache-on-play (v13): one ayah file, downloaded on demand the
@@ -667,17 +771,12 @@ class AudioDownloadService extends ChangeNotifier {
   /// succeeds — the user's rule is that words must download at ANY
   /// speed, even the slowest. A stalled connection (silence) fails
   /// instead of spinning forever, and the user can cancel any time.
-  /// Mutable so tests can shorten it; v13.15 (DIAGNOSTIC,
-  /// TEMPORARY) uses 8 s so a failing download surfaces its error
-  /// in seconds while the real cause is being found — REVERT to
-  /// 30 s in the real fix.
-  static Duration stallTimeout = const Duration(seconds: 8);
+  /// Mutable so tests can shorten it.
+  static Duration stallTimeout = const Duration(seconds: 30);
 
   /// Attempts per URL (first + retries) and the pause between them.
-  /// Mutable so tests can shorten the backoff. v13.15 (DIAGNOSTIC,
-  /// TEMPORARY): 1 instead of 2 — one attempt per URL, so the
-  /// error surfaces fast. REVERT to 2 in the real fix.
-  static int fetchAttempts = 1;
+  /// Mutable so tests can shorten the backoff.
+  static int fetchAttempts = 2;
   static Duration retryBackoff = const Duration(seconds: 2);
 
   /// One file, streamed (v13.3 — the old whole-body GET with a

@@ -50,7 +50,12 @@ void main() {
   test(
       'concurrent prefetch + foreground fetch of the same ayah downloads once',
       () async {
+    // v13.16: the served bytes must be a VALID mp3 (>= 1 KB + ID3
+    // header) or the cache validation rejects them as poisoned.
     final served = List<int>.generate(8000, (i) => i % 251);
+    served[0] = 0x49; // 'I'
+    served[1] = 0x44; // 'D'
+    served[2] = 0x33; // '3'
     final client = SlowClient(served);
     service = await makeService(client: client);
     final rifai =

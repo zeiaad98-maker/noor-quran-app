@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:noor_quran/data/audio_downloads.dart';
 import 'package:noor_quran/data/quran_audio.dart';
+import 'fake_mp3.dart';
 
 /// v13.13 — SurahPedia FIRST (user order 2026-11-19, "try every
 /// method"): v13.12 still failed on his phone (Husary, page 2,
@@ -184,7 +185,7 @@ void main() {
       final service = await makeService(MockClient((request) async {
         requested.add(request.url.toString());
         if (request.url.host == 'resources.surahpedia.com') {
-          return http.Response.bytes([1, 1], 200);
+          return http.Response.bytes(fakeMp3Bytes(fill: 1), 200);
         }
         return http.Response.bytes([], 404);
       }));
@@ -192,7 +193,7 @@ void main() {
 
       final file = await service.cacheAyahFile(husary, 2, 255);
       expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [1, 1]);
+      expect(await file!.readAsBytes(), fakeMp3Bytes(fill: 1));
       expect(requested, [
         'https://resources.surahpedia.com/Husary/002255.mp3',
       ]);
@@ -207,7 +208,7 @@ void main() {
           return http.Response.bytes([], 404);
         }
         if (request.url.host == 'www.everyayah.com') {
-          return http.Response.bytes([2, 2], 200);
+          return http.Response.bytes(fakeMp3Bytes(fill: 2), 200);
         }
         return http.Response.bytes([], 404);
       }));
@@ -215,7 +216,7 @@ void main() {
 
       final file = await service.cacheAyahFile(husary, 2, 255);
       expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [2, 2]);
+      expect(await file!.readAsBytes(), fakeMp3Bytes(fill: 2));
       expect(requested, [
         'https://resources.surahpedia.com/Husary/002255.mp3',
         'http://www.everyayah.com/data/Husary_64kbps/002255.mp3',
@@ -228,7 +229,7 @@ void main() {
       final service = await makeService(MockClient((request) async {
         requested.add(request.url.toString());
         if (request.url.host == 'resources.surahpedia.com') {
-          return http.Response.bytes([7, 1], 200);
+          return http.Response.bytes(fakeMp3Bytes(fill: 7), 200);
         }
         return http.Response.bytes([], 404);
       }));
@@ -236,7 +237,7 @@ void main() {
 
       final file = await service.cacheAyahFile(hani, 7, 1);
       expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [7, 1]);
+      expect(await file!.readAsBytes(), fakeMp3Bytes(fill: 7));
       expect(requested, [
         'https://resources.surahpedia.com/Hani_Rifai/007001.mp3',
       ]);
@@ -252,7 +253,7 @@ void main() {
           return http.Response.bytes([], 404);
         }
         if (request.url.host == 'cdn.islamic.network') {
-          return http.Response.bytes([6, 6], 200);
+          return http.Response.bytes(fakeMp3Bytes(fill: 6), 200);
         }
         return http.Response.bytes([], 404);
       }));
@@ -260,7 +261,7 @@ void main() {
 
       final file = await service.cacheAyahFile(ajmi, 2, 255);
       expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [6, 6]);
+      expect(await file!.readAsBytes(), fakeMp3Bytes(fill: 6));
       expect(requested, [
         'http://www.everyayah.com/data/ahmed_ibn_ali_al_ajamy_128kbps/002255.mp3',
         'https://cdn.islamic.network/quran/audio/64/ar.ahmedajamy/262.mp3',

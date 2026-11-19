@@ -76,6 +76,19 @@ class FakeJustAudioPlatform extends JustAudioPlatform {
   /// assert the attempt happened.
   final Set<String> failLoadSubstrings = {};
 
+  /// Play-failure injection (v13.16, for the poisoned-cache test):
+  /// the next [failPlayCount] play() calls throw a
+  /// TimeoutException, like the real platform hanging on a corrupt
+  /// local file — then plays succeed again. Lets a test prove the
+  /// controller deletes the bad file and falls back to streaming.
+  /// Shared across every platform player the factory creates:
+  /// just_audio creates a fresh platform player per load after a
+  /// stop, so the count lives in one box ([_failPlayBox]) and is
+  /// spent once overall — not once per player.
+  int get failPlayCount => _failPlayBox.count;
+  set failPlayCount(int value) => _failPlayBox.count = value;
+  final _failPlayBox = FailPlayBox();
+
   /// Artificial delay for every [FakeAudioPlayerPlatform.load]
   /// (v13.2, for race tests): a slow load lets the test inject a
   /// stale finish / a stop mid-load and prove the controller handles
@@ -107,6 +120,7 @@ class FakeJustAudioPlatform extends JustAudioPlatform {
       autoFinish: autoFinish,
       failLoadSubstrings: failLoadSubstrings,
       loadDelay: loadDelay,
+      failPlayBox: _failPlayBox,
     );
     players.add(created);
     return created;
@@ -125,11 +139,19 @@ class FakeJustAudioPlatform extends JustAudioPlatform {
       DisposeAllPlayersResponse();
 }
 
+/// Shared mutable counter for injected play() failures (v13.16).
+/// The factory hands the SAME box to every platform player it
+/// creates, so "fail the next N plays" means N across all players.
+class FailPlayBox {
+  int count = 0;
+}
+
 class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
   FakeAudioPlayerPlatform(super.id,
       {required this.autoFinish,
       required this.failLoadSubstrings,
-      this.loadDelay = Duration.zero});
+      this.loadDelay = Duration.zero,
+      required this.failPlayBox});
 
   final _playbackEvents = StreamController<PlaybackEventMessage>.broadcast();
   final _playerData = StreamController<PlayerDataMessage>.broadcast();
@@ -146,6 +168,10 @@ class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
   /// Substrings of URIs whose load must fail (shared with the
   /// factory — see [FakeJustAudioPlatform.failLoadSubstrings]).
   final Set<String> failLoadSubstrings;
+
+  /// Remaining injected play() failures (v13.16 — shared box,
+  /// see [FakeJustAudioPlatform.failPlayCount]).
+  final FailPlayBox failPlayBox;
 
   /// True once a seek happened since the last load — i.e. this play
   /// is a word play (the ayah scope never seeks). Decides which
@@ -222,6 +248,12 @@ class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
 
   @override
   Future<PlayResponse> play(PlayRequest request) async {
+    // v13.16: injected failure — a corrupt local file hangs the
+    // real player's play() until the controller's timeout fires.
+    if (failPlayBox.count > 0) {
+      failPlayBox.count--;
+      throw TimeoutException('injected play failure (v13.16 test)');
+    }
     playing = true;
     _playerData.add(PlayerDataMessage(playing: true));
     // Nudge past the seek point so _waitForPositionBeyond passes.

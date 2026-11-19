@@ -11,6 +11,7 @@ import 'package:noor_quran/data/audio_downloads.dart';
 import 'package:noor_quran/data/quran_audio.dart';
 
 import 'zip_fixture.dart';
+import 'fake_mp3.dart';
 
 /// v12 reciter downloads: per-surah + full-Mushaf background
 /// downloads with surah-level resume, offline playback files on disk.
@@ -64,7 +65,7 @@ void main() {
     // v13.5: one surah ZIP (stored, like the real everyayah ZIPs)
     // instead of one request per ayah.
     final zipBytes = buildSurahZip(
-      {for (var a = 1; a <= 4; a++) '11200$a.mp3': [1, 2, 3, 4]},
+      {for (var a = 1; a <= 4; a++) '11200$a.mp3': fakeMp3Bytes()},
       stored: true,
     );
     service = await makeService(
@@ -73,7 +74,7 @@ void main() {
         if (request.url.path.endsWith('.zip')) {
           return http.Response.bytes(zipBytes, 200);
         }
-        return http.Response.bytes([1, 2, 3, 4], 200);
+        return http.Response.bytes(fakeMp3Bytes(), 200);
       }),
     );
     final husary = reciters[0];
@@ -94,7 +95,7 @@ void main() {
     for (var a = 1; a <= 4; a++) {
       final file = service.localAyahFile(husary, 112, a);
       expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [1, 2, 3, 4]);
+      expect(await file!.readAsBytes(), fakeMp3Bytes());
     }
     // Not downloaded: no local file.
     expect(service.localAyahFile(husary, 112, 5), isNull);
@@ -106,7 +107,7 @@ void main() {
     // v13.5: the job downloads the surah ZIP once and extracts only
     // the missing ayahs — the pre-existing file is left untouched.
     final zipBytes = buildSurahZip(
-      {for (var a = 1; a <= 4; a++) '11200$a.mp3': [1, 2, 3, 4]},
+      {for (var a = 1; a <= 4; a++) '11200$a.mp3': fakeMp3Bytes()},
       stored: true,
     );
     service = await makeService(
@@ -115,14 +116,15 @@ void main() {
         if (request.url.path.endsWith('.zip')) {
           return http.Response.bytes(zipBytes, 200);
         }
-        return http.Response.bytes([1, 2, 3, 4], 200);
+        return http.Response.bytes(fakeMp3Bytes(), 200);
       }),
     );
     final husary = reciters[0];
     final dir = Directory('${tempDir.path}/${husary.everyayah}');
     await dir.create(recursive: true);
     // Pretend 112001 was already downloaded in an earlier run.
-    await File('${dir.path}/112001.mp3').writeAsBytes([9, 9]);
+    await File('${dir.path}/112001.mp3')
+        .writeAsBytes(fakeMp3Bytes(fill: 9));
     await File('${dir.path}/manifest.json')
         .writeAsString(jsonEncode(['112001']));
 
@@ -139,13 +141,13 @@ void main() {
     // the ZIP's copy).
     expect(
       await File('${dir.path}/112001.mp3').readAsBytes(),
-      [9, 9],
+      fakeMp3Bytes(fill: 9),
     );
     // The missing ayahs came from the ZIP.
     for (var a = 2; a <= 4; a++) {
       expect(
         await File('${dir.path}/11200$a.mp3').readAsBytes(),
-        [1, 2, 3, 4],
+        fakeMp3Bytes(),
       );
     }
   });
@@ -159,7 +161,7 @@ void main() {
     // failures, so a failure that happens ONCE is absorbed and the
     // job completes — the job pauses only on a HARD failure.)
     final zipBytes = buildSurahZip(
-      {for (var a = 1; a <= 4; a++) '11200$a.mp3': [7]},
+      {for (var a = 1; a <= 4; a++) '11200$a.mp3': fakeMp3Bytes()},
       stored: true,
     );
     var failZip = true;
@@ -171,7 +173,7 @@ void main() {
       if (request.url.path.endsWith('.zip')) {
         return http.Response.bytes(zipBytes, 200);
       }
-      return http.Response.bytes([7], 200);
+      return http.Response.bytes(fakeMp3Bytes(), 200);
     });
     service = await makeService(client: flaky);
 
@@ -199,13 +201,13 @@ void main() {
   test('a second download while one runs is refused', () async {
     final slow = MockClient((request) async {
       await Future<void>.delayed(const Duration(milliseconds: 150));
-      return http.Response.bytes([1], 200);
+      return http.Response.bytes(fakeMp3Bytes(), 200);
     });
     service = await makeService(client: slow);
 
     expect(await service.downloadSurahs(0, [114]), isTrue);
     // Still running (one ZIP request x 150ms, plus the per-ayah
-    // fallback the bad 1-byte ZIP triggers): the second start is
+    // fallback the bad ZIP triggers): the second start is
     // refused.
     expect(await service.downloadSurahs(1, [112]), isFalse);
     await waitForIdle(service);

@@ -10,6 +10,7 @@ import 'package:noor_quran/data/audio_player_controller.dart';
 import 'package:noor_quran/data/quran_audio.dart';
 
 import 'fake_just_audio.dart';
+import 'fake_mp3.dart';
 
 /// v13.12 — the RADICAL audio fix (user order 2026-11-18, "root
 /// fix, not a workaround", corrected the same day): v13.11 still
@@ -195,7 +196,7 @@ void main() {
           return http.Response.bytes([], 404);
         }
         if (request.url.host == 'huggingface.co') {
-          return http.Response.bytes([9, 9], 200);
+          return http.Response.bytes(fakeMp3Bytes(fill: 9), 200);
         }
         return http.Response.bytes([], 404);
       }));
@@ -203,7 +204,7 @@ void main() {
 
       final file = await service.cacheAyahFile(minshawi, 2, 255);
       expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [9, 9]);
+      expect(await file!.readAsBytes(), fakeMp3Bytes(fill: 9));
       expect(requested, [
         'https://resources.surahpedia.com/Minshawy_Mujawwad/002255.mp3',
         'http://www.everyayah.com/data/Minshawy_Mujawwad_64kbps/002255.mp3',
@@ -227,7 +228,7 @@ void main() {
           return http.Response.bytes([], 404);
         }
         if (request.url.host == 'alfurqan.online') {
-          return http.Response.bytes([4, 4], 200);
+          return http.Response.bytes(fakeMp3Bytes(fill: 4), 200);
         }
         return http.Response.bytes([], 404);
       }));
@@ -235,7 +236,7 @@ void main() {
 
       final file = await service.cacheAyahFile(minshawi, 2, 255);
       expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [4, 4]);
+      expect(await file!.readAsBytes(), fakeMp3Bytes(fill: 4));
       expect(requested, [
         'https://resources.surahpedia.com/Minshawy_Mujawwad/002255.mp3',
         'http://www.everyayah.com/data/Minshawy_Mujawwad_64kbps/002255.mp3',
@@ -251,7 +252,7 @@ void main() {
       final service = await makeService(MockClient((request) async {
         requested.add(request.url.toString());
         if (request.url.host == 'everyayah.com') {
-          return http.Response.bytes([2, 2], 200);
+          return http.Response.bytes(fakeMp3Bytes(fill: 2), 200);
         }
         return http.Response.bytes([], 404);
       }));
@@ -259,7 +260,7 @@ void main() {
 
       final file = await service.cacheAyahFile(husary, 112, 2);
       expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [2, 2]);
+      expect(await file!.readAsBytes(), fakeMp3Bytes(fill: 2));
       expect(requested, [
         'https://resources.surahpedia.com/Husary/112002.mp3',
         'http://www.everyayah.com/data/Husary_64kbps/112002.mp3',
@@ -315,7 +316,7 @@ void main() {
             counts[url] == 2) {
           final name = request.url.pathSegments.last;
           final ayah = int.parse(name.substring(3, 6));
-          return http.Response.bytes([ayah], 200);
+          return http.Response.bytes(fakeMp3Bytes(fill: ayah), 200);
         }
         return http.Response.bytes([], 404);
       }));
@@ -336,7 +337,7 @@ void main() {
         expect(counts[url], 2, reason: 'ayah $s:$a retried once');
         final cached = service.localAyahFile(husary, s, a);
         expect(cached, isNotNull, reason: 'ayah $s:$a cached');
-        expect(await cached!.readAsBytes(), [a]);
+        expect(await cached!.readAsBytes(), fakeMp3Bytes(fill: a));
       }
     });
 
@@ -399,7 +400,7 @@ void main() {
             counts[url] == 2) {
           final name = request.url.pathSegments.last;
           final ayah = int.parse(name.substring(3, 6));
-          return http.Response.bytes([ayah], 200);
+          return http.Response.bytes(fakeMp3Bytes(fill: ayah), 200);
         }
         return http.Response.bytes([], 404);
       }));

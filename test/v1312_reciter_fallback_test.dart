@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:noor_quran/data/audio_downloads.dart';
 import 'package:noor_quran/data/quran_audio.dart';
+import 'fake_mp3.dart';
 
 /// v13.12 — alternate per-ayah hosts for the 3 reciters
 /// islamic.network does not carry (Tunaiji, Tablawi, Dosari),
@@ -124,7 +125,7 @@ void main() {
           return http.Response.bytes([], 404);
         }
         if (request.url.host == 'verses.quran.com') {
-          return http.Response.bytes([2, 2], 200);
+          return http.Response.bytes(fakeMp3Bytes(fill: 2), 200);
         }
         return http.Response.bytes([], 404);
       }));
@@ -132,7 +133,7 @@ void main() {
 
       final file = await service.cacheAyahFile(tunaiji, 2, 255);
       expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [2, 2]);
+      expect(await file!.readAsBytes(), fakeMp3Bytes(fill: 2));
       expect(requested, [
         'https://resources.surahpedia.com/Khalefa_Al-Tunaiji/002255.mp3',
         'http://www.everyayah.com/data/khalefa_al_tunaiji_64kbps/002255.mp3',
@@ -152,7 +153,7 @@ void main() {
           return http.Response.bytes([], 404);
         }
         if (request.url.host == 'huggingface.co') {
-          return http.Response.bytes([3, 3], 200);
+          return http.Response.bytes(fakeMp3Bytes(fill: 3), 200);
         }
         return http.Response.bytes([], 404);
       }));
@@ -160,7 +161,7 @@ void main() {
 
       final file = await service.cacheAyahFile(tunaiji, 2, 255);
       expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [3, 3]);
+      expect(await file!.readAsBytes(), fakeMp3Bytes(fill: 3));
       expect(requested, [
         'https://resources.surahpedia.com/Khalefa_Al-Tunaiji/002255.mp3',
         'http://www.everyayah.com/data/khalefa_al_tunaiji_64kbps/002255.mp3',
@@ -185,13 +186,13 @@ void main() {
             request.url.host == 'mirrors.quranicaudio.com') {
           return http.Response.bytes([], 404);
         }
-        return http.Response.bytes([5, 5], 200);
+        return http.Response.bytes(fakeMp3Bytes(fill: 5), 200);
       }));
       addTearDown(service.dispose);
 
       final file = await service.cacheAyahFile(tablawi, 2, 255);
       expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [5, 5]);
+      expect(await file!.readAsBytes(), fakeMp3Bytes(fill: 5));
       expect(requested, [
         'https://resources.surahpedia.com/Mohammad_al_Tablaway/002255.mp3',
         'http://www.everyayah.com/data/Mohammad_al_Tablaway_64kbps/002255.mp3',
@@ -213,7 +214,7 @@ void main() {
           return http.Response.bytes([], 404);
         }
         if (request.url.host == 'mirrors.quranicaudio.com') {
-          return http.Response.bytes([8, 8], 200);
+          return http.Response.bytes(fakeMp3Bytes(fill: 8), 200);
         }
         return http.Response.bytes([], 404);
       }));
@@ -221,7 +222,7 @@ void main() {
 
       final file = await service.cacheAyahFile(dossari, 2, 255);
       expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [8, 8]);
+      expect(await file!.readAsBytes(), fakeMp3Bytes(fill: 8));
       expect(requested, [
         'https://resources.surahpedia.com/Yasser_Ad-Dussary/002255.mp3',
         'http://www.everyayah.com/data/Yasser_Ad-Dussary_128kbps/002255.mp3',
@@ -248,13 +249,13 @@ void main() {
             request.url.host == 'huggingface.co') {
           return http.Response.bytes([], 404);
         }
-        return http.Response.bytes([7, 7], 200);
+        return http.Response.bytes(fakeMp3Bytes(fill: 7), 200);
       }));
       addTearDown(service.dispose);
 
       final file = await service.cacheAyahFile(reciters[0], 112, 2);
       expect(file, isNotNull);
-      expect(await file!.readAsBytes(), [7, 7]);
+      expect(await file!.readAsBytes(), fakeMp3Bytes(fill: 7));
       expect(requested, [
         'https://resources.surahpedia.com/Husary/112002.mp3',
         'http://www.everyayah.com/data/Husary_64kbps/112002.mp3',
