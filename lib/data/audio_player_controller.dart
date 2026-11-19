@@ -344,62 +344,20 @@ class AudioPlayerController extends ChangeNotifier {
     queueIndex = 0;
     wordIndex = null;
     _scopePlays = 1;
-    // v13.12 — whole-page preload, restructured (the user's
-    // order, 2026-11-18, corrected the same day): the page plays
-    // ONLY after ALL its ayahs are downloaded; no sound until
-    // the page is fully cached, no ayah-by-ayah loading
-    // mid-playback. Silent: no progress UI (the user chose no
-    // download display at all); the play button spinner is the only
-    // sign. The v13.11 preload failed the WHOLE page on the FIRST
-    // failed ayah, so one bad file killed a page even when the
-    // other ayahs were already cached — now [AudioDownloadService.
-    // preloadAyahs] collects the missing ayahs first and runs
-    // the full per-ayah chain ONCE MORE for them, and only ayahs
-    // STILL missing after both passes fail the page. There is NO
-    // whole-surah ZIP in the playback path at all (the user's
-    // correction: one page plays by itself, without the whole
-    // surah). Cached ayahs return at once, so a replay / retry
-    // costs nothing. stop() aborts the preload via the token
-    // (see stop()).
-    // v13.14 — the preload is still ATTEMPTED first (a fully
-    // cached page plays from local files, exactly as before), but
-    // it is no longer a GATE: when it fails, playback falls
-    // through to [_playCurrent] instead of erroring out. The
-    // user's phone fails EVERY Dart http download, so the gate
-    // meant the page scope never played at all — while the ayah
-    // scope streams fine through the native player. See the
-    // fall-through below.
-    final token = ++_playToken;
-    lastError = null;
-    isLoading = true;
-    downloadProgress = null;
-    notifyListeners();
-    final dl = downloads;
-    var preloaded = true;
-    if (dl != null) {
-      preloaded = await dl.preloadAyahs(
-        reciter,
-        queue,
-        isCancelled: () => token != _playToken,
-      );
-    }
-    if (token != _playToken || _disposed) return;
-    if (!preloaded) {
-      // v13.14 — fall through to _playCurrent() instead of
-      // reporting the error: the preload gate was the single point
-      // of failure on the user's phone. His phone fails EVERY Dart
-      // http download (all hosts, all versions), so the page scope
-      // NEVER played — it errored without ever trying the native
-      // player. _playCurrent plays ayah-by-ayah from the cache when
-      // present and otherwise streams each ayah through the native
-      // player (ExoPlayer, the path SurahApp/Wahy use), trying
-      // every host in order — and reports the error itself if the
-      // first ayah fails on every path. The spinner state is
-      // reset here first; _playCurrent sets its own loading state.
-      isLoading = false;
-      downloadProgress = null;
-      notifyListeners();
-    }
+    // v13.17 — DIRECT STREAM (the user's order, 2026-11-19:
+    // «خلي الكلمة والاية والصفحة خليها دغري يجيبها من النت»):
+    // the page streams DIRECTLY from the internet through the
+    // native player — NO whole-page preload, NO Dart download
+    // gate. The v13.12–v13.16 preload (download the whole page
+    // before any sound) spun for 14+ minutes on the user's phone
+    // with no sound and no error, because the Dart downloads
+    // crawl there. A cached ayah still plays from disk when it
+    // is already present ([_playCurrent] checks the local file
+    // first); the background prefetch warms the cache while the
+    // page plays, so replays and offline benefit. The surah
+    // scope is the exception: it still downloads first (the
+    // user's order — «خلي الصورة اذا بدنا نحملها»). There is NO
+    // whole-surah ZIP in the playback path.
     await _playCurrent();
   }
 
@@ -649,7 +607,9 @@ class AudioPlayerController extends ChangeNotifier {
   /// slowest"). Every step still ends: downloads fail only on a
   /// stall (no bytes for 30 s, see [AudioDownloadService]) or a
   /// cancel (stop / a newer play, via the token check), and the
-  /// just_audio steps keep their own short timeouts below. A
+  /// just_audio steps keep their own 30 s stall timeouts below
+  /// (v13.17 weakest-net rule: a slow-but-progressing stream is
+  /// never failed for being slow — only a true stall fails). A
   /// superseded attempt's failure is never the user's error (see the
   /// catches below).
   Future<void> _playCurrent({bool isReplay = false}) async {
@@ -680,19 +640,32 @@ class AudioPlayerController extends ChangeNotifier {
       if (scope == PlayerScope.word) {
         await _playWordCurrent(token, ayah);
       } else {
-        // Cache-on-play (v13): the ayah file is downloaded once and
-        // played from disk after that — clear, pure and complete on
-        // a weak connection, instant on repeat, offline after.
-        // A failed download falls back to streaming below. The
-        // download reports honest progress and aborts when this
-        // attempt is superseded (v13.3, FIX A).
-        final local = await downloads?.cacheAyahFile(
-          reciter,
-          ayah.$1,
-          ayah.$2,
-          onProgress: _onDownloadProgress,
-          isCancelled: () => token != _playToken,
-        );
+        // v13.17 — STREAM DIRECTLY for the word / ayah / page
+        // scopes (the user's order, 2026-11-19: «خلي الكلمة
+        // والاية والصفحة خليها دغري يجيبها من النت»): the ayah
+        // comes straight from the internet through the native
+        // player — NO foreground Dart download. The local file
+        // is used ONLY when it is already on disk and valid:
+        // [localAyahFile] is a sync check, and the v13.16
+        // validation deletes an invalid file on the spot. The
+        // surah scope is the exception: it still downloads
+        // first (the user's order — «خلي الصورة اذا بدنا
+        // نحملها»), so it keeps the old cache-on-play path
+        // below: the file is downloaded once and played from
+        // disk after that — clear, pure and complete on a weak
+        // connection, instant on repeat, offline after.
+        File? local;
+        if (scope == PlayerScope.surah) {
+          local = await downloads?.cacheAyahFile(
+            reciter,
+            ayah.$1,
+            ayah.$2,
+            onProgress: _onDownloadProgress,
+            isCancelled: () => token != _playToken,
+          );
+        } else {
+          local = downloads?.localAyahFile(reciter, ayah.$1, ayah.$2);
+        }
         if (token != _playToken || _disposed) return;
         // v13.16: a cached file that will not play is a POISONED
         // cache entry (a partial/corrupt file from an old stalled
@@ -710,7 +683,7 @@ class AudioPlayerController extends ChangeNotifier {
                 .timeout(const Duration(seconds: 20));
             if (token != _playToken || _disposed) return;
             await _player.setSpeed(speed).timeout(const Duration(seconds: 5));
-            await _player.play().timeout(const Duration(seconds: 10));
+            await _player.play().timeout(const Duration(seconds: 30));
             played = true;
           } catch (e) {
             // A superseded attempt's failure is not the file's
@@ -858,13 +831,12 @@ class AudioPlayerController extends ChangeNotifier {
     // relative to its own files — proven by transcription). No
     // shift table any more: it encoded the API's wrong numbers.
     final fileNumber = audioPos;
-    final wbwLocal = await downloads?.cacheWbwFile(
-      ayah.$1,
-      ayah.$2,
-      fileNumber,
-      onProgress: _onDownloadProgress,
-      isCancelled: () => token != _playToken,
-    );
+    // v13.17 — DIRECT STREAM (the user's order, 2026-11-19):
+    // the word comes straight from the internet — NO foreground
+    // Dart download. The cached file is used ONLY when already
+    // on disk and valid: [localWbwFile] is a sync check, and the
+    // v13.16 validation deletes an invalid file on the spot.
+    final wbwLocal = downloads?.localWbwFile(ayah.$1, ayah.$2, fileNumber);
     if (token != _playToken || _disposed) return false;
     if (wbwLocal != null &&
         await _loadLocal(wbwLocal, Duration.zero, token)) {
@@ -892,12 +864,12 @@ class AudioPlayerController extends ChangeNotifier {
   /// (no ghost audio after a stop / timeout invalidated it).
   Future<bool> _loadLocal(File file, Duration seekTo, int token) async {
     try {
-      await _player.setFilePath(file.path).timeout(const Duration(seconds: 10));
+      await _player.setFilePath(file.path).timeout(const Duration(seconds: 30));
       if (token != _playToken) return false;
       await _player.seek(seekTo).timeout(const Duration(seconds: 5));
       if (token != _playToken) return false;
       await _player.setSpeed(speed).timeout(const Duration(seconds: 5));
-      await _player.play().timeout(const Duration(seconds: 10));
+      await _player.play().timeout(const Duration(seconds: 30));
       if (token != _playToken) {
         await _player.stop();
         return false;
@@ -914,7 +886,7 @@ class AudioPlayerController extends ChangeNotifier {
         // plays instead of faking success by extrapolation.
         if (token == _playToken) {
           lastStreamError ??= 'local ${file.path} — stall: position '
-              'never moved (buffering, 6s)';
+              'never moved (buffering, 30s)';
           try {
             await _player.stop();
           } catch (_) {}
@@ -957,12 +929,12 @@ class AudioPlayerController extends ChangeNotifier {
   /// [_loadLocal]).
   Future<bool> _loadAndPlay(String url, Duration seekTo, int token) async {
     try {
-      await _player.setUrl(url).timeout(const Duration(seconds: 10));
+      await _player.setUrl(url).timeout(const Duration(seconds: 30));
       if (token != _playToken) return false;
       await _player.seek(seekTo).timeout(const Duration(seconds: 5));
       if (token != _playToken) return false;
       await _player.setSpeed(speed).timeout(const Duration(seconds: 5));
-      await _player.play().timeout(const Duration(seconds: 10));
+      await _player.play().timeout(const Duration(seconds: 30));
       if (token != _playToken) {
         await _player.stop();
         return false;
@@ -979,7 +951,7 @@ class AudioPlayerController extends ChangeNotifier {
         // plays instead of faking success by extrapolation.
         if (token == _playToken) {
           lastStreamError ??= '$url — stall: position never moved '
-              '(buffering, 6s)';
+              '(buffering, 30s)';
           try {
             await _player.stop();
           } catch (_) {}
@@ -1015,7 +987,7 @@ class AudioPlayerController extends ChangeNotifier {
   /// True once the player position has moved past [target] (+100 ms
   /// of slack), or the item already finished (a very short word can
   /// complete before the first position event arrives — it did play).
-  /// False after 6 s with no movement (buffering stall). The timer
+  /// False after 30 s with no movement (buffering stall). The timer
   /// lives inside, so timing out cannot leak the subscription.
   Future<bool> _waitForPositionBeyond(Duration target) async {
     final beyond = target + const Duration(milliseconds: 100);
@@ -1032,7 +1004,7 @@ class AudioPlayerController extends ChangeNotifier {
     sub = _player.positionStream.listen((position) {
       if (position > beyond) done(true);
     });
-    final timer = Timer(const Duration(seconds: 6), () => done(false));
+    final timer = Timer(const Duration(seconds: 30), () => done(false));
     try {
       return await completer.future;
     } finally {
