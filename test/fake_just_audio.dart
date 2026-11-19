@@ -95,6 +95,14 @@ class FakeJustAudioPlatform extends JustAudioPlatform {
   /// it — the real load is instant in the fake.
   Duration loadDelay = Duration.zero;
 
+  /// Delay before the first position movement after [FakeAudioPlayerPlatform.play]
+  /// (v13.17 weakest-net test): a slow-but-progressing stream whose
+  /// position first moves only after this long. The nudge is
+  /// scheduled, not awaited — play() still returns at once, so the
+  /// controller's _waitForPositionBeyond is what waits for the
+  /// movement (the 30 s stall window under test).
+  Duration movePositionAfter = Duration.zero;
+
   FakeAudioPlayerPlatform get player => players.last;
 
   /// Total loads across ALL players created so far (just_audio
@@ -120,6 +128,7 @@ class FakeJustAudioPlatform extends JustAudioPlatform {
       autoFinish: autoFinish,
       failLoadSubstrings: failLoadSubstrings,
       loadDelay: loadDelay,
+      movePositionAfter: movePositionAfter,
       failPlayBox: _failPlayBox,
     );
     players.add(created);
@@ -151,6 +160,7 @@ class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
       {required this.autoFinish,
       required this.failLoadSubstrings,
       this.loadDelay = Duration.zero,
+      this.movePositionAfter = Duration.zero,
       required this.failPlayBox});
 
   final _playbackEvents = StreamController<PlaybackEventMessage>.broadcast();
@@ -160,6 +170,11 @@ class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
   /// factory's [FakeJustAudioPlatform.loadDelay]). Mutable, so a test
   /// can slow a load down after the player was created.
   Duration loadDelay;
+
+  /// Delay before the first position movement after [play] (see the
+  /// factory's [FakeJustAudioPlatform.movePositionAfter]). Mutable, so
+  /// a test can slow one play down after the player was created.
+  Duration movePositionAfter;
 
   Duration position = Duration.zero;
   Duration duration = const Duration(seconds: 60);
@@ -190,6 +205,7 @@ class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
   final List<String> loadUris = [];
 
   Timer? _finishTimer;
+  Timer? _moveTimer;
 
   @override
   Stream<PlaybackEventMessage> get playbackEventMessageStream =>
@@ -214,6 +230,8 @@ class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
   void _cancelTimer() {
     _finishTimer?.cancel();
     _finishTimer = null;
+    _moveTimer?.cancel();
+    _moveTimer = null;
   }
 
   @override
@@ -256,24 +274,47 @@ class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
     }
     playing = true;
     _playerData.add(PlayerDataMessage(playing: true));
-    // Nudge past the seek point so _waitForPositionBeyond passes.
-    position += const Duration(milliseconds: 250);
-    _playbackEvents.add(_event(ProcessingStateMessage.ready));
-    // Then finish the item with exactly ONE trigger (see class
-    // doc): a position jump for a word play, a single completed
-    // state otherwise.
     _cancelTimer();
-    if (autoFinish) {
-      _finishTimer = Timer(const Duration(milliseconds: 100), () {
+    // Nudge past the seek point so _waitForPositionBeyond passes.
+    // v13.17: with movePositionAfter set, the nudge is scheduled
+    // instead of immediate — play() still returns at once, so the
+    // controller waits for the movement in _waitForPositionBeyond.
+    // The finish timer starts only after the nudge, so the item
+    // cannot "finish" before it ever moved.
+    void nudge() {
+      position += const Duration(milliseconds: 250);
+      _playbackEvents.add(_event(ProcessingStateMessage.ready));
+      // Then finish the item with exactly ONE trigger (see class
+      // doc): a position jump for a word play, a single completed
+      // state otherwise.
+      if (autoFinish) {
+        _finishTimer = Timer(const Duration(milliseconds: 100), () {
+          if (!playing) return;
+          if (_seekedSinceLoad) {
+            position += const Duration(seconds: 5);
+            _playbackEvents.add(_event(ProcessingStateMessage.ready));
+          } else {
+            position = duration;
+            _playbackEvents.add(_event(ProcessingStateMessage.completed));
+          }
+        });
+      }
+    }
+
+    if (movePositionAfter > Duration.zero) {
+      // The stream is buffering: report it, so just_audio's
+      // position stays frozen at updatePosition (it extrapolates
+      // from wall-clock only while state == ready — a buffering
+      // stream must NOT look like it is moving). The nudge at
+      // movePositionAfter flips the state back to ready with the
+      // position advanced.
+      _playbackEvents.add(_event(ProcessingStateMessage.buffering));
+      _moveTimer = Timer(movePositionAfter, () {
         if (!playing) return;
-        if (_seekedSinceLoad) {
-          position += const Duration(seconds: 5);
-          _playbackEvents.add(_event(ProcessingStateMessage.ready));
-        } else {
-          position = duration;
-          _playbackEvents.add(_event(ProcessingStateMessage.completed));
-        }
+        nudge();
       });
+    } else {
+      nudge();
     }
     return PlayResponse();
   }

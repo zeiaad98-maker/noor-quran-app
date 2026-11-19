@@ -37,13 +37,12 @@ import 'fake_mp3.dart';
 ///   the fast path collects the missing ayahs instead of failing
 ///   on the first one, then the full per-ayah chain runs ONCE MORE
 ///   for the missing ayahs only; only ayahs STILL missing fail
-///   the preload (the service still returns false then). v13.14:
-///   a failed preload no longer GATES playPages — it falls through
-///   to _playCurrent and streams ayah-by-ayah through the native
-///   player (the user's phone fails every Dart download). The
-///   "all hosts fail on both passes" playPages test pins the new
-///   behaviour; the preloadAyahs service test still pins false.
-///   No ZIP in playback, ever.
+///   the preload (the service still returns false then). v13.17
+///   SUPERSEDES the preload at the controller level (user order,
+///   2026-11-19: the page streams DIRECTLY, no preload at all):
+///   the preloadAyahs service test still pins the service
+///   behaviour, but the playPages tests below now pin the
+///   stream-first behaviour. No ZIP in playback, ever.
 /// * Part 3 — single-ayah streaming fallback, mirroring the word
 ///   path ([ayahStreamUrlsInOrder]): on a cache failure the ayah
 ///   streams from www, then the alternates, then islamic.network,
@@ -359,7 +358,7 @@ void main() {
     });
   });
 
-  group('playPages with the retry pass (v13.12)', () {
+  group('playPages direct stream (v13.17)', () {
     late Directory tempDir;
 
     Future<AudioDownloadService> makeService(
@@ -384,25 +383,15 @@ void main() {
       }
     });
 
-    test('page 2: first pass fails, retry pass fills it, page plays',
-        () async {
+    test('page 2: the first ayah streams at once, no preload '
+        '(v13.17)', () async {
       AudioDownloadService.fetchAttempts = 1;
       final requested = <String>[];
-      final counts = <String, int>{};
       final service = await makeService(MockClient((request) async {
-        final url = request.url.toString();
-        requested.add(url);
-        counts[url] = (counts[url] ?? 0) + 1;
-        // The www file 404s on its FIRST request (transient
-        // failure) and serves on the SECOND — every other host
-        // 404s always, so only the retry pass can fill the page.
-        if (request.url.host == 'www.everyayah.com' &&
-            counts[url] == 2) {
-          final name = request.url.pathSegments.last;
-          final ayah = int.parse(name.substring(3, 6));
-          return http.Response.bytes(fakeMp3Bytes(fill: ayah), 200);
-        }
-        return http.Response.bytes([], 404);
+        requested.add(request.url.toString());
+        final name = request.url.pathSegments.last;
+        final ayah = int.parse(name.substring(3, 6));
+        return http.Response.bytes(fakeMp3Bytes(fill: ayah), 200);
       }));
       addTearDown(service.dispose);
       final controller = AudioPlayerController(downloads: service);
@@ -416,14 +405,23 @@ void main() {
       expect(fake.player.playing, isTrue);
       expect(controller.currentAyah, (2, 1));
       expect(fake.loadCount, loadsBefore + 1);
-      expect(fake.loadUris.last.endsWith('002001.mp3'), isTrue);
-      expect(fake.loadUris.last.startsWith('http'), isFalse);
+      // v13.17: the first ayah STREAMS from SurahPedia — the
+      // retry pass still exists at the service level (the
+      // preloadAyahs group above pins it), but playPages never
+      // runs it any more.
+      expect(fake.loadUris.last,
+          'https://resources.surahpedia.com/Husary/002001.mp3');
+      expect(requested.any((u) => u.contains('002001')), isFalse,
+          reason: 'no foreground download for the played ayah');
       // No whole-surah ZIP anywhere in the playback path.
       expect(requested.any((u) => u.contains('/zips/')), isFalse);
+      // Let the next-ayah prefetch settle before teardown deletes
+      // the temp dir.
+      await Future<void>.delayed(const Duration(milliseconds: 200));
     });
 
-    test('page 2: all hosts fail on both passes — preload fails, '
-        'page still plays via the native stream (v13.14)', () async {
+    test('page 2: all hosts fail — the page still plays via the '
+        'native stream (v13.17)', () async {
       AudioDownloadService.fetchAttempts = 1;
       final service = await makeService(MockClient((request) async {
         return http.Response.bytes([], 404);
@@ -436,10 +434,9 @@ void main() {
       final loadsBefore = fake.loadCount;
       await controller.playPages(2, 2);
 
-      // v13.14: the failed preload no longer gates playback — the
-      // page falls through to _playCurrent, which streams the
-      // first ayah through the native player (every Dart download
-      // failed, so nothing is cached).
+      // v13.17: no preload at all — the page streams the first
+      // ayah through the native player at once (every Dart
+      // download failed, so nothing is cached).
       expect(controller.lastError, isNull);
       expect(fake.player.playing, isTrue);
       expect(controller.currentAyah, (2, 1));
