@@ -166,12 +166,17 @@ void main() {
 
     // v13.3 (FIX A): the wall-clock budget is DELETED — a slow
     // download must still complete (stall timeout only, no time
-    // limit). A 2 s load that used to trip the 300 ms budget now
+    // limit). A 1 s load that used to trip the 300 ms budget now
     // plays through, with no error and no spinner left behind.
+    // v13.18: the per-host first-data deadline is ~2 s (the
+    // user's hard 1–2 s limit), so a slow load is proven inside
+    // that window here; a load slower than 2 s on a non-last
+    // host fails over to the next host, and the LAST host keeps
+    // the full 30 s backstop (see the v1318 backstop test).
     test('a slow load completes — no wall-clock budget any more',
         () async {
       controller.reciterIndex = 12;
-      fake.loadDelay = const Duration(seconds: 2);
+      fake.loadDelay = const Duration(seconds: 1);
 
       final playFuture = controller.playAyah(2, 33);
       await settle(800); // past the old 300 ms budget

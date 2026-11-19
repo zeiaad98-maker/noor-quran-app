@@ -246,14 +246,16 @@ void main() {
       ]);
       expect(requested, isEmpty);
     });
-    test('a slow stream still plays — the position first moves '
-        'after 15 s (weakest net: past the old 6 s limit, inside '
-        'the new 30 s window)', () async {
+    test('a slow stream still plays — the first data arrives '
+        'after 1 s (weakest net: inside the 2 s slow-host window)', () async {
       // The fake stream is slow-but-progressing: nothing moves
-      // for 15 s, then the position advances. Under the old 6 s
+      // for 1 s, then the first data arrives. Under the old 6 s
       // position wait this failed over to the next host and
       // reported an error; under the 30 s stall window it plays.
-      fake.movePositionAfter = const Duration(seconds: 15);
+      // v13.18: first data inside the 2 s slow-host window still
+      // plays on the first host — only a host with NO data at all
+      // in 2 s is abandoned (see v1318).
+      fake.movePositionAfter = const Duration(seconds: 1);
       final (service, _, requested) =
           await buildService((requested) => MockClient((request) async {
                 requested.add(request.url.toString());
@@ -268,7 +270,7 @@ void main() {
       final elapsed = DateTime.now().difference(started);
 
       // It really did wait for the slow stream (not fail fast).
-      expect(elapsed, greaterThanOrEqualTo(const Duration(seconds: 15)));
+      expect(elapsed, greaterThanOrEqualTo(const Duration(seconds: 1)));
       expect(controller.lastError, isNull);
       expect(fake.player.playing, isTrue);
       // No failover: the first host (SurahPedia) was never
