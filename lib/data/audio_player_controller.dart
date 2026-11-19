@@ -188,6 +188,39 @@ class AudioPlayerController extends ChangeNotifier {
 
   bool _disposed = false;
 
+  /// v13.18 — SLOW-HOST SWITCH: how long [_loadAndPlay] waits for
+  /// the FIRST buffered data from one host before abandoning it
+  /// for the next host in the chain — and how long its `setUrl`
+  /// gets. HARD REQUIREMENT (his words, 2026-11-19: «لازم ثانية
+  /// او ثانيتين يكون جاهز — يا ثانية يا ثانيتين»): first audio
+  /// within 1–2 s per ayah. The user's phone waited the full 30 s
+  /// stall window on SurahPedia for EVERY ayah (~30 s pause
+  /// between ayahs) even though a faster host was next in line.
+  /// Mutable so tests can shrink it (the download service's
+  /// [AudioDownloadService.stallTimeout] is mutable the same way).
+  /// The last host in the chain never uses it (full 30 s stall
+  /// window as the weakest-net backstop), and neither does a local
+  /// file.
+  Duration firstDataTimeout = const Duration(seconds: 2);
+
+  /// v13.18 — stall window for [_waitForPositionBeyond]: no
+  /// buffered progress at all for this long fails the wait. Every
+  /// buffered advance re-arms it, so a slow-but-progressing
+  /// stream is never failed for being slow (weakest-net rule).
+  /// Mutable so tests can shrink it.
+  Duration positionStallTimeout = const Duration(seconds: 30);
+
+  /// v13.18 — COMPLETION WATCHDOG grace: once the player is
+  /// playing and the position has reached the item's duration
+  /// (within 500 ms) with no `completed` event, this long is
+  /// allowed before the item is treated as finished and the
+  /// playback advances. Mutable so tests can shrink it.
+  Duration advanceWatchdogGrace = const Duration(seconds: 5);
+
+  /// The completion watchdog's timer (v13.18, see
+  /// [_armAdvanceWatchdog]). Null when no item is playing.
+  Timer? _advanceWatchdog;
+
   (int, int)? get currentAyah => queue.isEmpty ? null : queue[queueIndex];
 
   Reciter get reciter => reciters[reciterIndex];
@@ -464,6 +497,7 @@ class AudioPlayerController extends ChangeNotifier {
     // the next load's spinner.
     final token = ++_playToken;
     _finishToken = -1;
+    _cancelAdvanceWatchdog();
     _cancelRepeat();
     await _player.stop();
     if (!_disposed && token == _playToken) {
@@ -558,6 +592,52 @@ class AudioPlayerController extends ChangeNotifier {
     return (surah, verse);
   }
 
+  /// Completion watchdog (v13.18): a streamed ayah can play its
+  /// sound to the end while the platform never emits `completed`
+  /// — the page then sits on the first ayah forever with the
+  /// pause icon showing. Once an item really started, this
+  /// watches for its end: if the player is still playing and the
+  /// position has reached the item's duration (within 500 ms)
+  /// but no `completed` arrives within [advanceWatchdogGrace],
+  /// the item is treated as finished and [_onItemFinished] runs
+  /// exactly as if the platform had completed it (repeat logic
+  /// included — it is reused, not duplicated). A pause resets
+  /// the grace clock (the player must be playing for the grace
+  /// to count); a new play, a stop, or a dispose cancels the
+  /// watch. It can only fire for the play that started it (the
+  /// token + finish-token guard), and [_onItemFinished]'s own
+  /// guards dedupe it against a real `completed` event.
+  void _armAdvanceWatchdog(int token) {
+    _cancelAdvanceWatchdog();
+    DateTime? endReachedAt;
+    _advanceWatchdog = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_disposed || token != _playToken || token != _finishToken) {
+        _cancelAdvanceWatchdog();
+        return;
+      }
+      final duration = _player.duration;
+      final atEnd = _player.playing &&
+          duration != null &&
+          duration > Duration.zero &&
+          _player.position >= duration - const Duration(milliseconds: 500);
+      if (!atEnd) {
+        endReachedAt = null;
+        return;
+      }
+      endReachedAt ??= DateTime.now();
+      if (DateTime.now().difference(endReachedAt!) >=
+          advanceWatchdogGrace) {
+        _cancelAdvanceWatchdog();
+        _onItemFinished();
+      }
+    });
+  }
+
+  void _cancelAdvanceWatchdog() {
+    _advanceWatchdog?.cancel();
+    _advanceWatchdog = null;
+  }
+
   Future<void> _onItemFinished() async {
     if (_disposed || queue.isEmpty) return;
     // Only the play that actually STARTED may finish: a stale
@@ -617,6 +697,7 @@ class AudioPlayerController extends ChangeNotifier {
     if (ayah == null) return;
     final token = ++_playToken;
     _finishToken = -1;
+    _cancelAdvanceWatchdog();
     if (!isReplay) _itemPlays = 1;
     lastError = null;
     // v13.15: fresh attempt, fresh diagnosis.
@@ -725,10 +806,12 @@ class AudioPlayerController extends ChangeNotifier {
           // or error, like the word path. All hosts failed:
           // report the error, never silence.
           var streamed = false;
-          for (final url
-              in ayahStreamUrlsInOrder(reciter, ayah.$1, ayah.$2)) {
+          final streamUrls =
+              ayahStreamUrlsInOrder(reciter, ayah.$1, ayah.$2);
+          for (var i = 0; i < streamUrls.length; i++) {
             if (token != _playToken || _disposed) return;
-            if (await _loadAndPlay(url, Duration.zero, token)) {
+            if (await _loadAndPlay(streamUrls[i], Duration.zero, token,
+                isLastHost: i == streamUrls.length - 1)) {
               streamed = true;
               break;
             }
@@ -754,6 +837,11 @@ class AudioPlayerController extends ChangeNotifier {
           );
         }
       }
+      // v13.18 — completion watchdog: arm it only once the item
+      // really started (the finish token matches this attempt).
+      // A failed load never reaches here (it reports the error
+      // and returns), so the watch never arms for a silent play.
+      if (_finishToken == token) _armAdvanceWatchdog(token);
     } on TimeoutException catch (e) {
       // A superseded attempt's failure is not the user's error
       // (v13.2 bug 2): the load this attempt was waiting on was
@@ -847,8 +935,10 @@ class AudioPlayerController extends ChangeNotifier {
     // No cached file (or a corrupt one): stream, in the same order
     // as the cache path — SurahPedia first (v13.6), then the Quran.com
     // CDN, then the legacy host ([wbwWordUrlsInOrder]).
-    for (final url in wbwWordUrlsInOrder(ayah.$1, ayah.$2, fileNumber)) {
-      if (await _loadAndPlay(url, Duration.zero, token)) {
+    final wbwUrls = wbwWordUrlsInOrder(ayah.$1, ayah.$2, fileNumber);
+    for (var i = 0; i < wbwUrls.length; i++) {
+      if (await _loadAndPlay(wbwUrls[i], Duration.zero, token,
+          isLastHost: i == wbwUrls.length - 1)) {
         wordUsesWbw = true;
         _finishToken = token;
         return true;
@@ -874,10 +964,11 @@ class AudioPlayerController extends ChangeNotifier {
         await _player.stop();
         return false;
       }
-      final moved = await _waitForPositionBeyond(seekTo);
-      if (!moved) {
-        // v13.15: the load "succeeded" but the position never
-        // moved — a buffering stall, not a play. Record it.
+      final wait = await _waitForPositionBeyond(seekTo);
+      if (!wait.moved) {
+        // v13.15: the load "succeeded" but no audio data was
+        // ever buffered — a buffering stall, not a play. Record
+        // it.
         // v13.16: first failure wins (??=) — a local-file failure
         // recorded earlier in this attempt (the poisoned cache)
         // must not be overwritten by a later stream failure.
@@ -885,8 +976,8 @@ class AudioPlayerController extends ChangeNotifier {
         // reset it (see the catch below) so the next URL really
         // plays instead of faking success by extrapolation.
         if (token == _playToken) {
-          lastStreamError ??= 'local ${file.path} — stall: position '
-              'never moved (buffering, 30s)';
+          lastStreamError ??= 'local ${file.path} — stall: no '
+              'buffered data (buffering, 30s)';
           try {
             await _player.stop();
           } catch (_) {}
@@ -921,15 +1012,34 @@ class AudioPlayerController extends ChangeNotifier {
   }
 
   /// Loads [url], seeks when [seekTo] is given, plays, and waits
-  /// until the position actually moves past the seek point — a
-  /// stalled buffer leaves the position frozen, which is exactly
-  /// the "spinner forever, no sound" failure. Returns false on any
+  /// until REAL audio data is buffered past the seek point — a
+  /// stalled buffer leaves the buffered position frozen, which is
+  /// exactly the "spinner forever, no sound" failure (v13.18: the
+  /// old position-only wait passed on just_audio's extrapolated
+  /// position with zero data buffered). Returns false on any
   /// timeout or error instead of throwing; the caller decides the
   /// fallback. The [token] is checked after every await (see
   /// [_loadLocal]).
-  Future<bool> _loadAndPlay(String url, Duration seekTo, int token) async {
+  ///
+  /// [isLastHost] marks the last URL in the caller's chain: only
+  /// a non-last host gets the slow-host switch (its `setUrl` and
+  /// its wait for first buffered data each get [firstDataTimeout],
+  /// ~2 s — the user's hard 1–2 s limit per ayah); the last host
+  /// keeps the full stall window as the weakest-net backstop.
+  Future<bool> _loadAndPlay(String url, Duration seekTo, int token,
+      {bool isLastHost = false}) async {
     try {
-      await _player.setUrl(url).timeout(const Duration(seconds: 30));
+      // v13.18 — the per-host first-data deadline (~2 s) bounds
+      // `setUrl` too: on a slow host ExoPlayer's preparation
+      // hangs waiting for the first bytes, so an unbounded (30 s)
+      // setUrl would blow the 1–2 s goal before the buffered
+      // wait even starts. The last host keeps the full stall
+      // window (weakest-net backstop). A timed-out setUrl is
+      // abandoned cleanly by the catch below (stop() resets the
+      // stuck `playing` flag — the just_audio gotcha).
+      await _player
+          .setUrl(url)
+          .timeout(isLastHost ? positionStallTimeout : firstDataTimeout);
       if (token != _playToken) return false;
       await _player.seek(seekTo).timeout(const Duration(seconds: 5));
       if (token != _playToken) return false;
@@ -939,19 +1049,28 @@ class AudioPlayerController extends ChangeNotifier {
         await _player.stop();
         return false;
       }
-      final moved = await _waitForPositionBeyond(seekTo);
-      if (!moved) {
-        // v13.15: the load "succeeded" but the position never
-        // moved — a buffering stall, not a play. Record it: on the
-        // user's phone this is indistinguishable from a load
+      final wait = await _waitForPositionBeyond(
+        seekTo,
+        firstDataTimeout: isLastHost ? null : firstDataTimeout,
+      );
+      if (!wait.moved) {
+        // v13.15: the load "succeeded" but no audio data was ever
+        // buffered — a buffering stall, not a play. Record it: on
+        // the user's phone this is indistinguishable from a load
         // failure, and the generic error hides which one it was.
         // v13.16: first failure wins (??=) — see [_loadLocal].
         // The stalled play also left `playing` stuck true —
         // reset it (see the catch below) so the next URL really
         // plays instead of faking success by extrapolation.
+        // v13.18: say WHICH stall it was — abandoned by the
+        // slow-host switch (no data at all) or the full stall
+        // window (data started, then stopped).
         if (token == _playToken) {
-          lastStreamError ??= '$url — stall: position never moved '
-              '(buffering, 30s)';
+          lastStreamError ??= wait.stall == 'no-data'
+              ? '$url — stall: no buffered data in '
+                  '${firstDataTimeout.inSeconds}s (slow host)'
+              : '$url — stall: no buffered progress in '
+                  '${positionStallTimeout.inSeconds}s';
           try {
             await _player.stop();
           } catch (_) {}
@@ -984,32 +1103,100 @@ class AudioPlayerController extends ChangeNotifier {
     }
   }
 
-  /// True once the player position has moved past [target] (+100 ms
-  /// of slack), or the item already finished (a very short word can
-  /// complete before the first position event arrives — it did play).
-  /// False after 30 s with no movement (buffering stall). The timer
-  /// lives inside, so timing out cannot leak the subscription.
-  Future<bool> _waitForPositionBeyond(Duration target) async {
+  /// True once REAL audio data has been buffered past [target]
+  /// (+100 ms of slack), or the item already finished (a very
+  /// short word can complete before the first buffered event
+  /// arrives — it did play).
+  ///
+  /// v13.18 — THE SILENT-PLAYING HOLE (proven reading just_audio
+  /// 0.9.46: `position` is EXTRAPOLATED from wall-clock time
+  /// while `playing && ready`, and `positionStream` emits those
+  /// extrapolated values on a timer): the old position-only wait
+  /// passed with ZERO audio data actually decoded — `_loadAndPlay`
+  /// returned true while ExoPlayer had buffered nothing: no
+  /// sound, no completion, pause icon showing, and the failover
+  /// to the next host never ran. The wait now watches
+  /// `bufferedPosition` — fed straight from the platform's
+  /// playback events, never extrapolated — so only real buffered
+  /// data passes it. A local file reports its whole duration as
+  /// buffered at once, so local playback is unaffected.
+  ///
+  /// Two windows, both stall-based (weakest-net rule: a
+  /// slow-but-progressing stream is never failed for being slow):
+  /// * [firstDataTimeout] — when set, no buffered data at all
+  ///   within that window abandons the wait at once (the
+  ///   slow-host switch: the next host is tried instead of
+  ///   burning the full stall window on a host that is not
+  ///   delivering — the user's phone waited ~30 s per ayah on
+  ///   SurahPedia). Null disables the switch (the last host
+  ///   keeps the full stall window as the backstop, and so does
+  ///   a local file).
+  /// * [positionStallTimeout] — no buffered progress at all for
+  ///   this long fails the wait; every buffered advance re-arms
+  ///   it, so a trickling stream never fails for being slow.
+  /// Returns a record: [moved] and the stall kind on failure
+  /// (`'no-data'` for the first-data switch, `'stalled'` for the
+  /// stall window, null on success) — the caller puts the real
+  /// reason in the diagnostic. Timers and subscriptions are
+  /// cancelled in `finally`, so timing out cannot leak them.
+  Future<({bool moved, String? stall})> _waitForPositionBeyond(
+    Duration target, {
+    Duration? firstDataTimeout,
+  }) async {
     final beyond = target + const Duration(milliseconds: 100);
-    if (_player.position > beyond ||
+    if (_player.bufferedPosition > beyond ||
         _player.processingState == ProcessingState.completed) {
-      return true;
+      return (moved: true, stall: null);
     }
-    final completer = Completer<bool>();
-    void done(bool value) {
-      if (!completer.isCompleted) completer.complete(value);
+    final completer = Completer<({bool moved, String? stall})>();
+    void done(bool moved, String? stall) {
+      if (!completer.isCompleted) {
+        completer.complete((moved: moved, stall: stall));
+      }
     }
 
-    late final StreamSubscription<Duration> sub;
-    sub = _player.positionStream.listen((position) {
-      if (position > beyond) done(true);
+    final startBuffered = _player.bufferedPosition;
+    var sawBufferedAdvance = false;
+    Timer? stallTimer;
+    Timer? firstDataTimer;
+    void armStall() {
+      stallTimer?.cancel();
+      stallTimer =
+          Timer(positionStallTimeout, () => done(false, 'stalled'));
+    }
+
+    late final StreamSubscription<Duration> bufferedSub;
+    late final StreamSubscription<PlayerState> stateSub;
+    bufferedSub = _player.bufferedPositionStream.listen((buffered) {
+      if (buffered > startBuffered) {
+        // Real data arrived — the slow-host switch no longer
+        // applies, and the stall window restarts: slow but
+        // progressing is never failed for being slow.
+        sawBufferedAdvance = true;
+        firstDataTimer?.cancel();
+        firstDataTimer = null;
+        armStall();
+      }
+      if (buffered > beyond) done(true, null);
     });
-    final timer = Timer(const Duration(seconds: 30), () => done(false));
+    stateSub = _player.playerStateStream.listen((state) {
+      if (state.processingState == ProcessingState.completed) {
+        done(true, null);
+      }
+    });
+    armStall();
+    if (firstDataTimeout != null) {
+      firstDataTimer = Timer(firstDataTimeout, () {
+        if (!sawBufferedAdvance) done(false, 'no-data');
+      });
+    }
     try {
       return await completer.future;
     } finally {
-      timer.cancel();
-      await sub.cancel();
+      stallTimer?.cancel();
+      firstDataTimer?.cancel();
+      await bufferedSub.cancel();
+      await stateSub.cancel();
     }
   }
 
@@ -1047,6 +1234,7 @@ class AudioPlayerController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _cancelAdvanceWatchdog();
     _player.dispose();
     super.dispose();
   }
