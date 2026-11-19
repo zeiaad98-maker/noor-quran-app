@@ -464,6 +464,33 @@ List<String> ayahStreamUrlsInOrder(Reciter reciter, int surah, int ayah) {
   return urls;
 }
 
+/// Moves the URL whose host matches [fastestHost] to the front of
+/// [urls], keeping the rest in their standing order (v13.19
+/// fastest-host memory: the host that delivered first buffered
+/// data fastest on the last successful play is tried first next
+/// time, so a slow first host does not burn its deadline on every
+/// ayah). Returns [urls] unchanged when [fastestHost] is null, when
+/// the chain has fewer than two URLs, or when no URL matches the
+/// host (the host is not in this chain — e.g. a wbw-only host on
+/// the ayah chain — so there is nothing to move). The remembered
+/// host is only an ordering hint: it never bypasses the per-host
+/// first-data deadline or the validation. Pure, pinned by unit
+/// tests.
+List<String> orderUrlsFastestFirst(List<String> urls, String? fastestHost) {
+  if (fastestHost == null || fastestHost.isEmpty || urls.length < 2) {
+    return urls;
+  }
+  final index = urls.indexWhere((url) {
+    try {
+      return Uri.parse(url).host == fastestHost;
+    } catch (_) {
+      return false;
+    }
+  });
+  if (index <= 0) return urls;
+  return [urls[index], ...urls.sublist(0, index), ...urls.sublist(index + 1)];
+}
+
 /// Full-surah mp3 of [reciter] from mp3quran.net (fallback only —
 /// the player normally plays the surah as a sequence of ayah files).
 String mp3quranSurahUrl(Reciter reciter, int surah) =>
