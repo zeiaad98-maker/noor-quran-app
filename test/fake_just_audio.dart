@@ -103,6 +103,35 @@ class FakeJustAudioPlatform extends JustAudioPlatform {
   /// movement (the 30 s stall window under test).
   Duration movePositionAfter = Duration.zero;
 
+  /// Per-URI first-data delays (v13.18 slow-host test): for a load
+  /// whose URI contains one of these substrings, the first data
+  /// (buffered + position movement) arrives after that delay
+  /// instead of [movePositionAfter]. First matching entry wins.
+  /// Lets one test make SurahPedia slow (20 s) and the next host
+  /// fast (2 s) on the same chain.
+  final Map<String, Duration> firstDataDelayBySubstring = {};
+
+  /// URIs that NEVER buffer (v13.18 silent-play test): a load
+  /// whose URI contains one of these substrings reports
+  /// `bufferedPosition` 0 forever and its play() emits no
+  /// position events and never finishes — just_audio then
+  /// extrapolates the position on its own while `playing &&
+  /// ready`, which is exactly the silent-playing hole the
+  /// controller must detect via `bufferedPosition`.
+  final Set<String> neverBufferSubstrings = {};
+
+  /// Amount buffered per advance step (v13.18 stall re-arm test):
+  /// when set, the delayed first-data advance adds this much to
+  /// `bufferedPosition` per [movePositionAfter] interval instead
+  /// of jumping straight to the full duration — a trickling
+  /// stream that must never fail for being slow.
+  Duration bufferedStep = Duration.zero;
+
+  /// Duration reported by created players (v13.18 watchdog test):
+  /// a short duration lets a streamed ayah reach its end in a
+  /// few real seconds so the watchdog can be observed.
+  Duration fakeDuration = const Duration(seconds: 60);
+
   FakeAudioPlayerPlatform get player => players.last;
 
   /// Total loads across ALL players created so far (just_audio
@@ -130,6 +159,10 @@ class FakeJustAudioPlatform extends JustAudioPlatform {
       loadDelay: loadDelay,
       movePositionAfter: movePositionAfter,
       failPlayBox: _failPlayBox,
+      firstDataDelayBySubstring: firstDataDelayBySubstring,
+      neverBufferSubstrings: neverBufferSubstrings,
+      bufferedStep: bufferedStep,
+      duration: fakeDuration,
     );
     players.add(created);
     return created;
@@ -161,7 +194,11 @@ class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
       required this.failLoadSubstrings,
       this.loadDelay = Duration.zero,
       this.movePositionAfter = Duration.zero,
-      required this.failPlayBox});
+      required this.failPlayBox,
+      this.firstDataDelayBySubstring = const {},
+      this.neverBufferSubstrings = const {},
+      this.bufferedStep = Duration.zero,
+      this.duration = const Duration(seconds: 60)});
 
   final _playbackEvents = StreamController<PlaybackEventMessage>.broadcast();
   final _playerData = StreamController<PlayerDataMessage>.broadcast();
@@ -177,8 +214,35 @@ class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
   Duration movePositionAfter;
 
   Duration position = Duration.zero;
-  Duration duration = const Duration(seconds: 60);
+  Duration duration;
   bool playing = false;
+
+  /// Buffered position reported in every playback event (v13.18):
+  /// a stream starts at zero and grows as data arrives; a local
+  /// file is fully buffered at once. The controller's
+  /// `_waitForPositionBeyond` watches this, never the
+  /// extrapolated `position`.
+  Duration bufferedPosition = const Duration(seconds: 60);
+
+  /// Per-URI first-data delays (shared with the factory — see
+  /// [FakeJustAudioPlatform.firstDataDelayBySubstring]).
+  final Map<String, Duration> firstDataDelayBySubstring;
+
+  /// URIs that never buffer (shared with the factory — see
+  /// [FakeJustAudioPlatform.neverBufferSubstrings]).
+  final Set<String> neverBufferSubstrings;
+
+  /// Amount buffered per advance step (shared with the factory —
+  /// see [FakeJustAudioPlatform.bufferedStep]).
+  Duration bufferedStep;
+
+  /// True when the loaded URI never buffers (v13.18 silent host).
+  bool _silentLoad = false;
+
+  /// Delay before the first buffered advance for the loaded URI
+  /// (resolved at load time from [firstDataDelayBySubstring] or
+  /// [movePositionAfter]).
+  Duration _firstDataDelay = Duration.zero;
 
   /// Substrings of URIs whose load must fail (shared with the
   /// factory — see [FakeJustAudioPlatform.failLoadSubstrings]).
@@ -220,7 +284,7 @@ class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
         processingState: state,
         updateTime: DateTime.now(),
         updatePosition: position,
-        bufferedPosition: duration,
+        bufferedPosition: bufferedPosition,
         duration: duration,
         icyMetadata: null,
         currentIndex: 0,
@@ -246,6 +310,29 @@ class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
         failLoadSubstrings.any(message.uri.contains)) {
       throw PlatformException(
           code: 'load_failed', message: 'injected failure: ${message.uri}');
+    }
+    // v13.18 — model buffering faithfully: a stream (http) starts
+    // with nothing buffered — data arrives only when play()
+    // advances it — while a local file is fully buffered at once.
+    // A URI in [neverBufferSubstrings] never buffers at all (the
+    // silent host). The first-data delay is resolved per URI so
+    // one test can make one host slow and the next fast.
+    final uri = message is UriAudioSourceMessage ? message.uri : '';
+    _silentLoad = neverBufferSubstrings.any(uri.contains);
+    if (uri.startsWith('http')) {
+      bufferedPosition = Duration.zero;
+    } else {
+      bufferedPosition = duration;
+    }
+    _firstDataDelay = Duration.zero;
+    for (final entry in firstDataDelayBySubstring.entries) {
+      if (uri.contains(entry.key)) {
+        _firstDataDelay = entry.value;
+        break;
+      }
+    }
+    if (_firstDataDelay == Duration.zero) {
+      _firstDataDelay = movePositionAfter;
     }
     position = request.initialPosition ?? Duration.zero;
     _seekedSinceLoad = false;
@@ -275,48 +362,77 @@ class FakeAudioPlayerPlatform extends AudioPlayerPlatform {
     playing = true;
     _playerData.add(PlayerDataMessage(playing: true));
     _cancelTimer();
-    // Nudge past the seek point so _waitForPositionBeyond passes.
-    // v13.17: with movePositionAfter set, the nudge is scheduled
-    // instead of immediate — play() still returns at once, so the
-    // controller waits for the movement in _waitForPositionBeyond.
-    // The finish timer starts only after the nudge, so the item
-    // cannot "finish" before it ever moved.
-    void nudge() {
-      position += const Duration(milliseconds: 250);
-      _playbackEvents.add(_event(ProcessingStateMessage.ready));
-      // Then finish the item with exactly ONE trigger (see class
-      // doc): a position jump for a word play, a single completed
-      // state otherwise.
-      if (autoFinish) {
-        _finishTimer = Timer(const Duration(milliseconds: 100), () {
-          if (!playing) return;
-          if (_seekedSinceLoad) {
-            position += const Duration(seconds: 5);
-            _playbackEvents.add(_event(ProcessingStateMessage.ready));
-          } else {
-            position = duration;
-            _playbackEvents.add(_event(ProcessingStateMessage.completed));
-          }
-        });
-      }
+    if (_silentLoad) {
+      // v13.18 — the silent host: no data ever arrives, so no
+      // position events and no finish. just_audio still reports
+      // `playing` and extrapolates the position on its own while
+      // `playing && ready` — that is exactly the silent-playing
+      // hole the controller must detect via `bufferedPosition`.
+      return PlayResponse();
     }
-
-    if (movePositionAfter > Duration.zero) {
+    // Advance the buffered data (and the position with it — data
+    // arriving moves both). v13.17: with a first-data delay set,
+    // the advance is scheduled instead of immediate — play()
+    // still returns at once, so the controller waits for the
+    // movement in _waitForPositionBeyond. With [bufferedStep]
+    // set, the advance adds one step per interval instead of
+    // jumping to the full duration (a trickling stream). The
+    // finish timer starts only once fully buffered, so the item
+    // cannot "finish" before it ever moved.
+    if (_firstDataDelay > Duration.zero) {
       // The stream is buffering: report it, so just_audio's
       // position stays frozen at updatePosition (it extrapolates
       // from wall-clock only while state == ready — a buffering
-      // stream must NOT look like it is moving). The nudge at
-      // movePositionAfter flips the state back to ready with the
-      // position advanced.
+      // stream must NOT look like it is moving). The advance at
+      // [_firstDataDelay] flips the state back to ready with
+      // data buffered and the position advanced.
       _playbackEvents.add(_event(ProcessingStateMessage.buffering));
-      _moveTimer = Timer(movePositionAfter, () {
-        if (!playing) return;
-        nudge();
-      });
+      _moveTimer = Timer(_firstDataDelay, _advanceBufferedStep);
     } else {
-      nudge();
+      _advanceBufferedStep();
     }
     return PlayResponse();
+  }
+
+  /// One buffered advance (see [play]): adds [bufferedStep] (or
+  /// jumps to the full duration when no step is set), nudges the
+  /// position with it, and reports `ready`. While more data is
+  /// still to come, the next step is scheduled after
+  /// [_firstDataDelay]; once fully buffered, the finish timer
+  /// starts (see the class doc).
+  void _advanceBufferedStep() {
+    if (!playing) return;
+    if (bufferedStep > Duration.zero) {
+      bufferedPosition += bufferedStep;
+      if (bufferedPosition > duration) bufferedPosition = duration;
+    } else {
+      bufferedPosition = duration;
+    }
+    position += const Duration(milliseconds: 250);
+    _playbackEvents.add(_event(ProcessingStateMessage.ready));
+    if (bufferedPosition < duration) {
+      _moveTimer = Timer(_firstDataDelay, _advanceBufferedStep);
+    } else {
+      _startFinishTimer();
+    }
+  }
+
+  /// Then finish the item with exactly ONE trigger (see class
+  /// doc): a position jump for a word play, a single completed
+  /// state otherwise.
+  void _startFinishTimer() {
+    if (autoFinish) {
+      _finishTimer = Timer(const Duration(milliseconds: 100), () {
+        if (!playing) return;
+        if (_seekedSinceLoad) {
+          position += const Duration(seconds: 5);
+          _playbackEvents.add(_event(ProcessingStateMessage.ready));
+        } else {
+          position = duration;
+          _playbackEvents.add(_event(ProcessingStateMessage.completed));
+        }
+      });
+    }
   }
 
   @override
