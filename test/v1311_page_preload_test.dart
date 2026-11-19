@@ -14,16 +14,20 @@ import 'fake_mp3.dart';
 
 /// v13.11 — whole-page preload + fallback reorder (user orders,
 /// 2026-11-18):
-/// * A page plays ONLY after ALL its ayahs are downloaded; no sound
-///   until the page is fully cached, no ayah-by-ayah loading
-///   mid-playback. A failed ayah stops the whole page with the
-///   error — never a half-played page.
+/// * v13.17 SUPERSEDES the preload (user order, 2026-11-19:
+///   «خلي الكلمة والاية والصفحة خليها دغري يجيبها من النت»):
+///   the page streams DIRECTLY from the internet — no preload,
+///   no Dart download gate. The service-level [preloadAyahs]
+///   and [cacheAyahFile] fallback-order tests below still pin
+///   the download service itself; only the playPages group
+///   changed to the new behaviour. The old rule (a page plays
+///   ONLY after ALL its ayahs are downloaded) spun for 14+
+///   minutes on the user's phone with no sound and no error.
 /// * v13.14 — the preload is still attempted first, but it no
 ///   longer GATES playback: when it fails, the page falls through
 ///   to _playCurrent and streams ayah-by-ayah through the native
 ///   player (the user's phone fails every Dart download, so the
-///   gate meant the page never played at all). The "one ayah
-///   fails" test below pins the new behaviour.
+///   gate meant the page never played at all).
 /// * [cacheAyahFile] tries the small files first: www per-ayah,
 ///   then bare per-ayah, and the whole-surah ZIP LAST (it was
 ///   second: a failed per-ayah file triggered a whole-surah ZIP
@@ -177,8 +181,8 @@ void main() {
     });
   });
 
-  group('playPages whole-page preload (v13.11)', () {
-    test('page 3: all ayahs cached before the first sound', () async {
+  group('playPages direct stream (v13.17)', () {
+    test('page 3: the first ayah streams at once, no preload', () async {
       AudioDownloadService.fetchAttempts = 1;
       final requested = <String>[];
       final service = await makeService(MockClient((request) async {
@@ -192,7 +196,6 @@ void main() {
       final controller = AudioPlayerController(downloads: service);
       addTearDown(controller.dispose);
       controller.reciterIndex = rifaiIndex;
-      final rifai = reciters[rifaiIndex];
       final pageAyahs = ayahsOfPages(3, 3);
       expect(pageAyahs.length, 11, reason: 'Baqarah 6–16');
 
@@ -202,26 +205,26 @@ void main() {
       expect(controller.lastError, isNull);
       expect(fake.player.playing, isTrue);
       expect(controller.currentAyah, (2, 6));
-      // Every ayah of the page is on disk BEFORE playback started.
-      for (final (s, a) in pageAyahs) {
-        final cached = service.localAyahFile(rifai, s, a);
-        expect(cached, isNotNull, reason: 'ayah $s:$a cached');
-        expect(await cached!.readAsBytes(), fakeMp3Bytes(fill: a));
-      }
-      // ...and the player loaded the local file, not a stream.
+      // v13.17: NO preload — the first ayah streams from
+      // SurahPedia at once, through the native player.
       expect(fake.loadCount, loadsBefore + 1);
-      expect(fake.loadUris.last.endsWith('002006.mp3'), isTrue);
-      expect(fake.loadUris.last.startsWith('http'), isFalse);
-      // The preload fetched each ayah exactly once, in page order.
-      // v13.13: SurahPedia is tried first, so it answers at once.
-      expect(
-          requested,
-          List.generate(11,
-              (i) => 'https://resources.surahpedia.com/Hani_Rifai/0020${(6 + i).toString().padLeft(2, '0')}.mp3'));
+      expect(fake.loadUris.last,
+          'https://resources.surahpedia.com/Hani_Rifai/002006.mp3');
+      // ...and no foreground Dart download ran for it.
+      expect(requested.any((u) => u.contains('002006')), isFalse);
+      // The background prefetch still warms the NEXT ayah while
+      // the page plays (its request appears after the play
+      // started, and only for 2:7 — never for the played ayah).
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(requested.any((u) => u.contains('002007')), isTrue);
+      expect(service.localAyahFile(reciters[rifaiIndex], 2, 7),
+          isNotNull);
+      expect(service.localAyahFile(reciters[rifaiIndex], 2, 6), isNull,
+          reason: 'the played ayah streamed, it did not download');
     });
 
-    test('one ayah fails: preload fails, page still plays via the '
-        'native stream (v13.14)', () async {
+    test('every host fails: the page still plays via the native '
+        'stream (v13.17)', () async {
       AudioDownloadService.fetchAttempts = 1;
       final requested = <String>[];
       final service = await makeService(MockClient((request) async {
@@ -239,33 +242,17 @@ void main() {
       final loadsBefore = fake.loadCount;
       await controller.playPages(3, 3);
 
-      // v13.14: the failed preload no longer gates playback — the
-      // page falls through to _playCurrent, which streams the
-      // first ayah through the native player (every Dart download
-      // failed, so nothing is cached).
+      // v13.17: no preload at all — the page streams the first
+      // ayah through the native player at once (every Dart
+      // download failed, so nothing is cached).
       expect(controller.lastError, isNull);
       expect(fake.player.playing, isTrue);
       expect(fake.loadCount, loadsBefore + 1);
       expect(fake.loadUris.last,
           'https://resources.surahpedia.com/Hani_Rifai/002006.mp3');
-      // v13.12: the preload COLLECTS the missing ayahs instead of
-      // failing on the first one — the fast path tried every
-      // ayah of the page (including the last, 2:16), then the
-      // full per-ayah chain ran ONCE MORE for the missing ayahs
-      // only. The www file for 2:6 was requested three times:
-      // once per preload pass, plus once more by _playCurrent's
-      // cache attempt before it fell back to streaming. There is
-      // NO whole-surah ZIP in the playback path at all.
-      expect(requested.any((u) => u.contains('002016')), isTrue,
-          reason: 'the fast path tried the whole page');
-      expect(
-          requested
-              .where((u) =>
-                  u ==
-                  'http://www.everyayah.com/data/Hani_Rifai_64kbps/002006.mp3')
-              .length,
-          3,
-          reason: 'two preload passes + the _playCurrent cache try');
+      // No foreground download ran for the played ayah, and
+      // there is NO whole-surah ZIP in the playback path at all.
+      expect(requested.any((u) => u.contains('002006')), isFalse);
       expect(requested.any((u) => u.contains('/zips/')), isFalse,
           reason: 'no ZIP in the playback path (v13.12)');
     });

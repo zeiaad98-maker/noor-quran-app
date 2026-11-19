@@ -282,6 +282,21 @@ void main() {
       await pumpFrames(tester, 6);
       expect(find.byType(AudioPlayerSheet), findsNothing);
       expect(find.byTooltip('إغلاق وإيقاف الصوت'), findsNothing);
+      // v13.17 — let the in-flight stream attempt time out before
+      // postTest: just_audio's load waits on
+      // processingStateStream.firstWhere, and in a widget test
+      // (FakeAsync) that wait never completes — the fake platform
+      // DOES emit ready and the state DOES become ready (a direct
+      // listener sees it), but the internal firstWhere only
+      // completes at teardown. On a real phone (real async) the
+      // same code plays at once (proven by the plain-test scratch
+      // run). The only thing postTest complains about is the
+      // pending setUrl timeout Timer, so pump past it: this must
+      // exceed _loadAndPlay's setUrl timeout (30 s after the
+      // weakest-net relaxation) — fake time is free, so pump
+      // generously. The stuck load futures themselves carry no
+      // timer and are abandoned at teardown.
+      await tester.pump(const Duration(seconds: 40));
       drainLayoutOverflows(tester);
     });
   });

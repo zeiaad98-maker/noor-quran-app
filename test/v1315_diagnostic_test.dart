@@ -111,15 +111,53 @@ void main() {
       // The stream error names the URL that failed.
       expect(controller.lastStreamError, isNotNull);
       expect(controller.lastStreamError, contains('002001.mp3'));
-      // The diagnostic line shows BOTH stages: the native-player
-      // (stream) failure and the Dart (download) failure.
+      // v13.17: the page streams DIRECTLY — no foreground Dart
+      // download ran, so the diagnostic shows ONLY the stream
+      // stage, never a download stage.
+      expect(controller.lastDiagnostic, isNotNull);
+      expect(controller.lastDiagnostic, contains('تشغيل:'));
+      expect(controller.lastDiagnostic, isNot(contains('تنزيل:')));
+
+      // Retry with the native player working: the page plays and
+      // the diagnosis clears — no stale error survives a success.
+      fake.failLoadSubstrings.clear();
+      await controller.retryLastError();
+      expect(controller.lastError, isNull);
+      expect(controller.lastStreamError, isNull);
+      expect(controller.lastDiagnostic, isNull);
+      expect(fake.player.playing, isTrue);
+      // Let the next-ayah prefetch settle before teardown deletes
+      // the temp dir.
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    });
+
+    test('surah scope: the download DOES run first, so the '
+        'diagnostic shows BOTH stages when it fails too', () async {
+      final downloads = await buildService(MockClient((request) async {
+        return http.Response.bytes([], 404);
+      }));
+      final controller = AudioPlayerController(downloads: downloads);
+      addTearDown(controller.dispose);
+      controller.reciterIndex = 0; // الحصري
+      fake.failLoadSubstrings.add('mp3');
+
+      await controller.playSurah(2);
+
+      expect(controller.lastError,
+          'تعذّر تحميل الصوت — تحقق من الاتصال وحاول مجدداً');
+      expect(controller.lastStreamError, isNotNull);
+      expect(controller.lastStreamError, contains('002001.mp3'));
+      // The surah scope downloads first (v13.17 keeps it), so
+      // the Dart 404 IS recorded and the diagnostic shows both
+      // stages: the native-player (stream) failure AND the Dart
+      // (download) failure.
       expect(controller.lastDiagnostic, isNotNull);
       expect(controller.lastDiagnostic, contains('تشغيل:'));
       expect(controller.lastDiagnostic, contains('تنزيل:'));
       expect(controller.lastDiagnostic, contains('HTTP 404'));
 
-      // Retry with the native player working: the page plays and
-      // the diagnosis clears — no stale error survives a success.
+      // Retry with the native player working: the surah plays and
+      // the diagnosis clears.
       fake.failLoadSubstrings.clear();
       await controller.retryLastError();
       expect(controller.lastError, isNull);
