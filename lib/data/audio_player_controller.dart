@@ -217,9 +217,49 @@ class AudioPlayerController extends ChangeNotifier {
   /// playback advances. Mutable so tests can shrink it.
   Duration advanceWatchdogGrace = const Duration(seconds: 5);
 
+  /// v13.19 — MID-AYAH STALL WATCHDOG window: while an item is
+  /// playing, this long with NEITHER the position NOR the
+  /// buffered position advancing at all is a true stall (not
+  /// slow progress — any advance of either value restarts the
+  /// clock). The v13.18 completion watchdog only fires at the
+  /// duration, so a stream that starts and then freezes
+  /// mid-item sat silent forever with the pause icon showing.
+  /// Mutable so tests can shrink it.
+  Duration stallWatchdogTimeout = const Duration(seconds: 30);
+
+  /// v13.19 — FASTEST-HOST MEMORY: the host (domain) that
+  /// delivered first buffered data fastest on the last
+  /// successful ayah stream — tried FIRST on the next play
+  /// (streams and prefetch downloads alike), so a slow first
+  /// host does not burn its 2 s deadline on every ayah. Only
+  /// an ordering hint: it never bypasses the 2 s first-data
+  /// deadline or the validation. Persisted under
+  /// [_fastestHostKey]; null when no host has ever proved fast.
+  /// Recorded ONLY from ayah streams — a wbw word host (e.g.
+  /// audio.qurancdn.com) is not in the ayah chain, so letting
+  /// word plays overwrite the memory would clobber the ayah
+  /// hint for nothing.
+  static const String _fastestHostKey = 'fastest_audio_host';
+  String? _fastestHost;
+
   /// The completion watchdog's timer (v13.18, see
   /// [_armAdvanceWatchdog]). Null when no item is playing.
   Timer? _advanceWatchdog;
+
+  /// The mid-ayah stall watchdog's timer (v13.19, see
+  /// [_armStallWatchdog]). Null when no item is playing.
+  Timer? _stallWatchdog;
+
+  /// The stream-URL chain of the item currently playing and the
+  /// index of the host it is playing from (v13.19): the stall
+  /// watchdog's failover restarts the SAME ayah from the NEXT
+  /// host, so it must know where the current play came from.
+  /// Set before every [_loadAndPlay] in the ayah and word
+  /// loops; null when the item plays from a local file (no host
+  /// to fail over to — a local stall reports the error instead).
+  /// Cleared at the start of every [_playCurrent].
+  List<String>? _currentStreamUrls;
+  int? _currentStreamIndex;
 
   (int, int)? get currentAyah => queue.isEmpty ? null : queue[queueIndex];
 
@@ -254,6 +294,12 @@ class AudioPlayerController extends ChangeNotifier {
     repeatCount = prefs.getInt(_repeatCountKey) ?? 3;
     speed = prefs.getDouble(_speedKey) ?? 1.0;
     wordAutoPlay = prefs.getBool(_wordAutoPlayKey) ?? false;
+    // v13.19 — fastest-host memory: the prefetch (and the next
+    // stream) must use it from the first play of the session,
+    // so it is pushed to the download service here as well as
+    // kept in memory.
+    _fastestHost = prefs.getString(_fastestHostKey);
+    downloads?.fastestHost = _fastestHost;
     notifyListeners();
   }
 
@@ -264,6 +310,34 @@ class AudioPlayerController extends ChangeNotifier {
     await prefs.setInt(_repeatCountKey, repeatCount);
     await prefs.setDouble(_speedKey, speed);
     await prefs.setBool(_wordAutoPlayKey, wordAutoPlay);
+  }
+
+  /// v13.19 — FASTEST-HOST MEMORY (fix 2): remembers [url]'s
+  /// host as the fastest known host — in memory at once (the
+  /// next play and the running prefetch use it immediately),
+  /// persisted for the next launch, and pushed to the download
+  /// service so the prefetch tries it first too. Only called
+  /// when the host proved fast (first buffered data within the
+  /// 2 s deadline — see [_loadAndPlay]): a backstop success
+  /// (slow) must never overwrite a fast memory. Never throws.
+  void _rememberFastHost(String url) {
+    String? host;
+    try {
+      host = Uri.parse(url).host;
+    } catch (_) {
+      return;
+    }
+    if (host.isEmpty || host == _fastestHost) return;
+    _fastestHost = host;
+    downloads?.fastestHost = host;
+    unawaited(_persistFastestHost(host));
+  }
+
+  Future<void> _persistFastestHost(String host) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_fastestHostKey, host);
+    } catch (_) {}
   }
 
   /// Word-card gear setting (v13.6): tapping a word plays it at once
@@ -498,6 +572,7 @@ class AudioPlayerController extends ChangeNotifier {
     final token = ++_playToken;
     _finishToken = -1;
     _cancelAdvanceWatchdog();
+    _cancelStallWatchdog();
     _cancelRepeat();
     await _player.stop();
     if (!_disposed && token == _playToken) {
@@ -638,6 +713,151 @@ class AudioPlayerController extends ChangeNotifier {
     _advanceWatchdog = null;
   }
 
+  /// Mid-ayah stall watchdog (v13.19): a stream can start (real
+  /// buffered data, the load wait passes) and then freeze
+  /// MID-ITEM — the network stops delivering, ExoPlayer's buffer
+  /// drains, and the platform reports `buffering`, so just_audio
+  /// stops extrapolating the position: NEITHER the position NOR
+  /// the buffered position advances, no `completed` ever arrives,
+  /// and the v13.18 completion watchdog (which only fires at the
+  /// duration) never runs. The page then sits silent on one ayah
+  /// forever with the pause icon showing. Once an item really
+  /// started, this watches for a true freeze: if neither value
+  /// advances for [stallWatchdogTimeout] while the player is
+  /// playing, the item is treated as stalled and
+  /// [_onPlaybackStalled] fails it over to the next host for the
+  /// SAME ayah. A slow-but-progressing stream (either value
+  /// advancing, however slowly) restarts the freeze clock on
+  /// every tick and can never trigger it. A pause resets the
+  /// clock (a pause is not a stall); a new play, a stop, a
+  /// finish in flight, or a dispose cancels the watch. It can
+  /// only fire for the play that started it (the token +
+  /// finish-token guard).
+  void _armStallWatchdog(int token) {
+    _cancelStallWatchdog();
+    Duration? lastPosition;
+    Duration? lastBuffered;
+    DateTime? frozenSince;
+    _stallWatchdog = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_disposed || token != _playToken || token != _finishToken) {
+        _cancelStallWatchdog();
+        return;
+      }
+      if (_handlingFinish) return;
+      if (_player.processingState == ProcessingState.completed) {
+        _cancelStallWatchdog();
+        return;
+      }
+      if (!_player.playing) {
+        // Paused by the user — the freeze clock resets; a pause
+        // is not a stall. Keep the last values fresh so the
+        // clock restarts cleanly on resume.
+        frozenSince = null;
+        lastPosition = _player.position;
+        lastBuffered = _player.bufferedPosition;
+        return;
+      }
+      final position = _player.position;
+      final buffered = _player.bufferedPosition;
+      if (lastPosition == null ||
+          position != lastPosition ||
+          buffered != lastBuffered) {
+        // Something moved — slow but progressing is never a stall.
+        frozenSince = null;
+        lastPosition = position;
+        lastBuffered = buffered;
+        return;
+      }
+      frozenSince ??= DateTime.now();
+      if (DateTime.now().difference(frozenSince!) >=
+          stallWatchdogTimeout) {
+        _cancelStallWatchdog();
+        unawaited(_onPlaybackStalled(token));
+      }
+    });
+  }
+
+  void _cancelStallWatchdog() {
+    _stallWatchdog?.cancel();
+    _stallWatchdog = null;
+  }
+
+  /// A mid-ayah stall fired (see [_armStallWatchdog]): the item
+  /// is playing but nothing has moved for a whole stall window.
+  /// Records the stall in the permanent diagnostic (first
+  /// failure wins, like every other stream error), invalidates
+  /// the stalled play so a stale `completed` from it can never
+  /// advance the queue, resets the stuck `playing` flag
+  /// (just_audio gotcha — see [_loadAndPlay]), and fails over
+  /// to the next host for the SAME ayah. When there is no next
+  /// host (the item played from a local file, or the last host
+  /// stalled too) the error is reported through the existing
+  /// path instead — never a silent skip, never a loop.
+  Future<void> _onPlaybackStalled(int token) async {
+    if (_disposed || token != _playToken || token != _finishToken) return;
+    if (_handlingFinish) return;
+    final urls = _currentStreamUrls;
+    final current = _currentStreamIndex;
+    if (token == _playToken) {
+      lastStreamError ??= urls != null &&
+              current != null &&
+              current < urls.length
+          ? '${urls[current]} — stall: توقف mid-ayah (no position or '
+              'buffered progress in ${stallWatchdogTimeout.inSeconds}s)'
+          : 'stall: توقف mid-ayah (no position or buffered progress '
+              'in ${stallWatchdogTimeout.inSeconds}s)';
+      notifyListeners();
+    }
+    _finishToken = -1;
+    try {
+      await _player.stop();
+    } catch (_) {}
+    if (token != _playToken || _disposed) return;
+    await _failoverToNextHost(token);
+  }
+
+  /// Restarts the current item from the host AFTER
+  /// [_currentStreamIndex] in [_currentStreamUrls] — one pass
+  /// through the remaining hosts only, never back to the start,
+  /// so the failover always terminates. On success the item is
+  /// playing again from the new host (finish token restored,
+  /// both watchdogs re-armed) — the SAME play continues, so the
+  /// repeat count is untouched. When the remaining hosts all
+  /// fail (or there was no stream chain at all — a local file),
+  /// the error is reported through [_reportError]. The loading
+  /// spinner shows during the switch, like any other load.
+  Future<void> _failoverToNextHost(int token) async {
+    final urls = _currentStreamUrls;
+    final next = (_currentStreamIndex ?? -1) + 1;
+    if (urls == null || next >= urls.length) {
+      if (token == _playToken) _reportError(_playCurrent);
+      return;
+    }
+    isLoading = true;
+    notifyListeners();
+    try {
+      for (var i = next; i < urls.length; i++) {
+        if (token != _playToken || _disposed) return;
+        _currentStreamIndex = i;
+        if (await _loadAndPlay(urls[i], Duration.zero, token,
+            isLastHost: i == urls.length - 1,
+            recordFastHost: scope != PlayerScope.word)) {
+          if (token != _playToken || _disposed) return;
+          _finishToken = token;
+          _armAdvanceWatchdog(token);
+          _armStallWatchdog(token);
+          return;
+        }
+      }
+      if (token == _playToken) _reportError(_playCurrent);
+    } finally {
+      if (!_disposed && token == _playToken) {
+        isLoading = false;
+        notifyListeners();
+      }
+    }
+  }
+
   Future<void> _onItemFinished() async {
     if (_disposed || queue.isEmpty) return;
     // Only the play that actually STARTED may finish: a stale
@@ -698,6 +918,13 @@ class AudioPlayerController extends ChangeNotifier {
     final token = ++_playToken;
     _finishToken = -1;
     _cancelAdvanceWatchdog();
+    _cancelStallWatchdog();
+    // v13.19: a new item has no stream chain yet — the stall
+    // watchdog's failover must not reuse the previous item's
+    // hosts. The streaming loops below set both before every
+    // attempt; a local-file item leaves them null.
+    _currentStreamUrls = null;
+    _currentStreamIndex = null;
     if (!isReplay) _itemPlays = 1;
     lastError = null;
     // v13.15: fresh attempt, fresh diagnosis.
@@ -806,10 +1033,19 @@ class AudioPlayerController extends ChangeNotifier {
           // or error, like the word path. All hosts failed:
           // report the error, never silence.
           var streamed = false;
-          final streamUrls =
-              ayahStreamUrlsInOrder(reciter, ayah.$1, ayah.$2);
+          // v13.19 (fix 2): the remembered-fastest host goes
+          // first — the chain is reordered, not shortened, and
+          // the last URL in the reordered chain keeps the full
+          // 30 s backstop.
+          final streamUrls = orderUrlsFastestFirst(
+              ayahStreamUrlsInOrder(reciter, ayah.$1, ayah.$2),
+              _fastestHost);
           for (var i = 0; i < streamUrls.length; i++) {
             if (token != _playToken || _disposed) return;
+            // v13.19: track the chain + the host in use, so a
+            // mid-ayah stall can fail over to the NEXT host.
+            _currentStreamUrls = streamUrls;
+            _currentStreamIndex = i;
             if (await _loadAndPlay(streamUrls[i], Duration.zero, token,
                 isLastHost: i == streamUrls.length - 1)) {
               streamed = true;
@@ -822,26 +1058,52 @@ class AudioPlayerController extends ChangeNotifier {
           }
         }
         _finishToken = token;
-        // Prefetch the next ayah while this one plays, so page /
-        // surah playback has no gap between ayahs on a weak
-        // connection. Best-effort: failures are ignored, the next
-        // play falls back to streaming. v13.10: the prefetch and
-        // the next play share one in-flight download per file (the
-        // download service dedupes by target path), so the prefetch
-        // can never corrupt the foreground load.
+        // Prefetch the next TWO ayahs while this one plays, so
+        // page / surah playback has no gap between ayahs on a
+        // weak connection (v13.19 fix 3b — his agreement,
+        // 2026-11-19: while ayah 1 plays, ayah 2 must ALREADY be
+        // fully ready in memory / cache so the move is instant —
+        // zero delay, not even 1%). The two are fetched
+        // SEQUENTIALLY (ayah 2 first, then ayah 3), starting the
+        // moment this ayah starts: on a weak connection two
+        // parallel downloads share the bandwidth and NEITHER
+        // finishes in time, while sequential gives ayah 2 the
+        // full bandwidth so it is ready when this ayah ends, and
+        // ayah 3 is ready during ayah 2's play. The ayahs are
+        // snapshotted up front (a next / prev tap mid-prefetch
+        // must not redirect it). Best-effort: failures are
+        // ignored, the next play falls back to streaming.
+        // v13.10: the prefetch and the next play share one
+        // in-flight download per file (the download service
+        // dedupes by target path), so the prefetch can never
+        // corrupt the foreground load.
         final dl = downloads;
         if (dl != null && queueIndex + 1 < queue.length) {
-          final nextAyah = queue[queueIndex + 1];
-          unawaited(
-            dl.cacheAyahFile(reciter, nextAyah.$1, nextAyah.$2).then((_) {}),
-          );
+          final upcoming = <(int, int)>[];
+          for (var k = 1; k <= 2 && queueIndex + k < queue.length; k++) {
+            upcoming.add(queue[queueIndex + k]);
+          }
+          if (upcoming.isNotEmpty) {
+            unawaited(() async {
+              for (final nextAyah in upcoming) {
+                try {
+                  await dl.cacheAyahFile(
+                      reciter, nextAyah.$1, nextAyah.$2);
+                } catch (_) {}
+              }
+            }());
+          }
         }
       }
       // v13.18 — completion watchdog: arm it only once the item
       // really started (the finish token matches this attempt).
       // A failed load never reaches here (it reports the error
       // and returns), so the watch never arms for a silent play.
-      if (_finishToken == token) _armAdvanceWatchdog(token);
+      // v13.19: the mid-ayah stall watchdog arms next to it.
+      if (_finishToken == token) {
+        _armAdvanceWatchdog(token);
+        _armStallWatchdog(token);
+      }
     } on TimeoutException catch (e) {
       // A superseded attempt's failure is not the user's error
       // (v13.2 bug 2): the load this attempt was waiting on was
@@ -934,11 +1196,19 @@ class AudioPlayerController extends ChangeNotifier {
     }
     // No cached file (or a corrupt one): stream, in the same order
     // as the cache path — SurahPedia first (v13.6), then the Quran.com
-    // CDN, then the legacy host ([wbwWordUrlsInOrder]).
-    final wbwUrls = wbwWordUrlsInOrder(ayah.$1, ayah.$2, fileNumber);
+    // CDN, then the legacy host ([wbwWordUrlsInOrder]). v13.19:
+    // the remembered-fastest host goes first (same hint as the
+    // ayah chain), and the chain is tracked for the stall
+    // watchdog's failover — but a word host is never REMEMBERED
+    // (recordFastHost: false): the memory is an ayah hint, and
+    // letting word plays overwrite it would clobber it.
+    final wbwUrls = orderUrlsFastestFirst(
+        wbwWordUrlsInOrder(ayah.$1, ayah.$2, fileNumber), _fastestHost);
     for (var i = 0; i < wbwUrls.length; i++) {
+      _currentStreamUrls = wbwUrls;
+      _currentStreamIndex = i;
       if (await _loadAndPlay(wbwUrls[i], Duration.zero, token,
-          isLastHost: i == wbwUrls.length - 1)) {
+          isLastHost: i == wbwUrls.length - 1, recordFastHost: false)) {
         wordUsesWbw = true;
         _finishToken = token;
         return true;
@@ -1026,8 +1296,17 @@ class AudioPlayerController extends ChangeNotifier {
   /// its wait for first buffered data each get [firstDataTimeout],
   /// ~2 s — the user's hard 1–2 s limit per ayah); the last host
   /// keeps the full stall window as the weakest-net backstop.
+  /// [recordFastHost] (v13.19) remembers a fast host for the
+  /// next play — true for ayah streams, false for wbw words
+  /// (a word host is not in the ayah chain, so recording it
+  /// would clobber the ayah hint — see [_fastestHost]).
   Future<bool> _loadAndPlay(String url, Duration seekTo, int token,
-      {bool isLastHost = false}) async {
+      {bool isLastHost = false, bool recordFastHost = true}) async {
+    // v13.19 — time to first buffered data, for the fastest-host
+    // memory: the clock starts before setUrl, so it covers the
+    // whole wait for audio (setUrl + play + first data), not
+    // just one step.
+    final startedAt = DateTime.now();
     try {
       // v13.18 — the per-host first-data deadline (~2 s) bounds
       // `setUrl` too: on a slow host ExoPlayer's preparation
@@ -1080,6 +1359,15 @@ class AudioPlayerController extends ChangeNotifier {
       // Success clears any earlier failed attempt's diagnosis for
       // this item (v13.15).
       lastStreamError = null;
+      // v13.19 — FASTEST-HOST MEMORY: remember this host only
+      // when it proved fast (first buffered data within the 2 s
+      // deadline). A backstop success (slow, on the last host)
+      // must never overwrite a fast memory — the next play
+      // would then start on a host already proven slow.
+      if (recordFastHost &&
+          DateTime.now().difference(startedAt) <= firstDataTimeout) {
+        _rememberFastHost(url);
+      }
       return true;
     } catch (e) {
       // v13.15: record the real load error instead of swallowing
@@ -1235,6 +1523,7 @@ class AudioPlayerController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _cancelAdvanceWatchdog();
+    _cancelStallWatchdog();
     _player.dispose();
     super.dispose();
   }

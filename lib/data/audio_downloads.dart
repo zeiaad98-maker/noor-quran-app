@@ -72,6 +72,19 @@ class AudioDownloadService extends ChangeNotifier {
   /// Downloaded surahs per reciter index (persisted in prefs).
   final Map<int, Set<int>> _downloadedSurahs = {};
 
+  /// v13.19 (fix 3a) — FASTEST-HOST MEMORY, shared with the
+  /// player controller: the host (domain) that delivered first
+  /// buffered data fastest on the last successful stream. The
+  /// controller sets this whenever a stream proves fast (and on
+  /// restore, from SharedPreferences); [cacheAyahFile] tries
+  /// that host FIRST, so the background prefetch does not burn
+  /// its time on SurahPedia (~30 s to first byte on the user's
+  /// network) while a fast host is next in line. Only an ordering
+  /// hint — it never bypasses the stall timeouts or the
+  /// validation, and when it is null the standing chain order is
+  /// used unchanged.
+  String? fastestHost;
+
   /// The current or most recent job (null only before any download).
   /// Kept after it finishes so the UI can show done/failed/cancelled
   /// instead of losing the result.
@@ -289,63 +302,30 @@ class AudioDownloadService extends ChangeNotifier {
     }
     final file = File('${dir.path}/${reciter.everyayah}/'
         '${ayahFileName(surah, ayah)}.mp3');
-    // 0. SurahPedia per-ayah (v13.13) — FIRST for the 15 mapped
-    // reciters: SurahApp's own host (resources.surahpedia.com),
-    // the one that demonstrably works from his Syrian network
-    // while everyayah / islamic.network / Maqra / mirrors fail
-    // there. Same everyayah recordings, byte-identical on sampled
-    // ayahs — only the host is new. Null for العجمي (no folder
-    // on SurahPedia), whose chain starts at step 1 as before.
+    // The chain in the standing order (v13.13): SurahPedia
+    // per-ayah first for the 15 mapped reciters (null for
+    // العجمي, whose chain starts at step 1), www per-ayah
+    // second, islamic.network third for the 12 reciters with a
+    // verified edition (null otherwise), the alternate hosts
+    // fourth for ALL 16 reciters, bare-HTTPS per-ayah last.
+    // There is NO whole-surah ZIP step (v13.12 — the user's
+    // correction): the ZIP is only the explicit bulk download.
+    // v13.19 (fix 3a): the remembered-fastest host, when set,
+    // moves to the front ([orderUrlsFastestFirst]) — the
+    // prefetch must not wait on SurahPedia's ~30 s first byte
+    // while a fast host is in the chain. With no memory the
+    // order below is used exactly as before.
+    final urls = <String>[];
     final surahpediaUrl = surahpediaAyahUrl(reciter, surah, ayah);
-    if (surahpediaUrl != null &&
-        await _fetchToFile(
-          surahpediaUrl,
-          file,
-          onProgress: onProgress,
-          isCancelled: isCancelled,
-        )) {
-      return localAyahFile(reciter, surah, ayah);
-    }
-    if (isCancelled?.call() ?? false) return null;
-    // 1. Per-ayah over the www host (v13.7) — one small file,
-    // playback starts in seconds.
-    if (await _fetchToFile(
-      everyayahWwwUrl(reciter, surah, ayah),
-      file,
-      onProgress: onProgress,
-      isCancelled: isCancelled,
-    )) {
-      return localAyahFile(reciter, surah, ayah);
-    }
-    if (isCancelled?.call() ?? false) return null;
-    // 2. islamic.network per-ayah (v13.11) — a DIFFERENT host: the
-    // same recordings as everyayah, verified by content
-    // (identical transcripts + bit-identical PCM). Only when the
-    // reciter has a verified edition (null otherwise — Tunaiji,
-    // Tablawi and Dosari have no per-ayah files there, and
-    // المنشاوي's edition is the wrong recording style, so they
-    // have no islamic.network step — all four get the alternate
-    // hosts at step 2b below instead).
+    if (surahpediaUrl != null) urls.add(surahpediaUrl);
+    urls.add(everyayahWwwUrl(reciter, surah, ayah));
     final islamicUrl = islamicNetworkUrl(reciter, surah, ayah);
-    if (islamicUrl != null &&
-        await _fetchToFile(
-          islamicUrl,
-          file,
-          onProgress: onProgress,
-          isCancelled: isCancelled,
-        )) {
-      return localAyahFile(reciter, surah, ayah);
-    }
-    if (isCancelled?.call() ?? false) return null;
-    // 2b. Alternate per-ayah hosts (v13.12) — ALL 16 reciters,
-    // two content-verified hosts each (see [altAyahUrls]):
-    // a DIFFERENT host family from everyayah.com /
-    // islamic.network. Same position as islamic.network: after
-    // www, before the bare file.
-    // Empty for no reciter any more — every chain has this step.
-    for (final altUrl in altAyahUrls(reciter, surah, ayah)) {
+    if (islamicUrl != null) urls.add(islamicUrl);
+    urls.addAll(altAyahUrls(reciter, surah, ayah));
+    urls.add(everyayahUrl(reciter, surah, ayah));
+    for (final url in orderUrlsFastestFirst(urls, fastestHost)) {
       if (await _fetchToFile(
-        altUrl,
+        url,
         file,
         onProgress: onProgress,
         isCancelled: isCancelled,
@@ -353,26 +333,6 @@ class AudioDownloadService extends ChangeNotifier {
         return localAyahFile(reciter, surah, ayah);
       }
       if (isCancelled?.call() ?? false) return null;
-    }
-    if (isCancelled?.call() ?? false) return null;
-    // 3. Bare-HTTPS per-ayah (v13.11) — still one small file,
-    // and the LAST try: when the www file fails, the next tries
-    // must be other SMALL files on other hosts, never a
-    // whole-surah ZIP (58 MB for Baqarah) that stalls the page
-    // for minutes before the error — the user's "the page takes
-    // too long" complaint (2026-11-18, page 151). The bare host
-    // does not open from his Syrian network, so on his phone this
-    // step fails fast; on networks where bare works it serves the
-    // ayah. There is NO step 4 any more (v13.12 — the user's
-    // correction): the whole-surah ZIP is NOT a playback fallback
-    // at all, only the explicit bulk download ([downloadSurahs]).
-    if (await _fetchToFile(
-      everyayahUrl(reciter, surah, ayah),
-      file,
-      onProgress: onProgress,
-      isCancelled: isCancelled,
-    )) {
-      return localAyahFile(reciter, surah, ayah);
     }
     return null;
   }
