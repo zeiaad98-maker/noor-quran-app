@@ -208,11 +208,14 @@ void main() {
       expect(await file!.readAsBytes(), [2, 2, 2]);
     });
 
-    test('failed www per-ayah and islamic.network fall back to the '
-        'bare per-ayah file (v13.11 order)', () async {
+    test('failed SurahPedia, www per-ayah and islamic.network fall '
+        'back to the bare per-ayah file (v13.13 order)', () async {
       final requested = <String>[];
       service = await buildService(MockClient((request) async {
         requested.add(request.url.toString());
+        if (request.url.host == 'resources.surahpedia.com') {
+          return http.Response.bytes([], 404);
+        }
         if (request.url.host == 'cdn.islamic.network') {
           return http.Response.bytes([], 404);
         }
@@ -234,6 +237,7 @@ void main() {
       expect(await file!.readAsBytes(), [7, 7]);
       // No ZIP request: the bare file served the ayah first.
       expect(requested, [
+        'https://resources.surahpedia.com/Husary/112002.mp3',
         'http://www.everyayah.com/data/Husary_64kbps/112002.mp3',
         'https://cdn.islamic.network/quran/audio/64/ar.husary/6223.mp3',
         'https://mirrors.quranicaudio.com/everyayah/Husary_64kbps/112002.mp3',
@@ -439,10 +443,11 @@ void main() {
       await controller.playAyah(2, 33);
 
       expect(controller.lastError, isNull);
-      // v13.12: the stream tries www FIRST now (the bare URL is
-      // last) — the cache failed, so the www file is what plays.
+      // v13.13: the stream tries SurahPedia FIRST now (the www
+      // file is second) — the cache failed, so the SurahPedia
+      // file is what plays.
       expect(fake.loadUris,
-          ['http://www.everyayah.com/data/Husary_64kbps/002033.mp3']);
+          ['https://resources.surahpedia.com/Husary/002033.mp3']);
       expect(fake.player.playing, isTrue);
     });
   });
