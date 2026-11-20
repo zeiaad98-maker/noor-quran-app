@@ -111,12 +111,16 @@ void main() {
       // The stream error names the URL that failed.
       expect(controller.lastStreamError, isNotNull);
       expect(controller.lastStreamError, contains('002001.mp3'));
-      // v13.17: the page streams DIRECTLY — no foreground Dart
-      // download ran, so the diagnostic shows ONLY the stream
-      // stage, never a download stage.
+      // v13.22: the page downloads its surah FIRST (SurahApp way),
+      // so the diagnostic shows BOTH stages when the download
+      // fails too — the Dart (download) 404 AND the stream
+      // failure — exactly like the surah scope below. The v13.17
+      // "page streams directly, no download stage" rule is
+      // superseded for the page scope.
       expect(controller.lastDiagnostic, isNotNull);
       expect(controller.lastDiagnostic, contains('تشغيل:'));
-      expect(controller.lastDiagnostic, isNot(contains('تنزيل:')));
+      expect(controller.lastDiagnostic, contains('تنزيل:'));
+      expect(controller.lastDiagnostic, contains('HTTP 404'));
 
       // Retry with the native player working: the page plays and
       // the diagnosis clears — no stale error survives a success.

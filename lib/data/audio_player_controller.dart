@@ -451,21 +451,95 @@ class AudioPlayerController extends ChangeNotifier {
     queueIndex = 0;
     wordIndex = null;
     _scopePlays = 1;
-    // v13.17 — DIRECT STREAM (the user's order, 2026-11-19:
-    // «خلي الكلمة والاية والصفحة خليها دغري يجيبها من النت»):
-    // the page streams DIRECTLY from the internet through the
-    // native player — NO whole-page preload, NO Dart download
-    // gate. The v13.12–v13.16 preload (download the whole page
-    // before any sound) spun for 14+ minutes on the user's phone
-    // with no sound and no error, because the Dart downloads
-    // crawl there. A cached ayah still plays from disk when it
-    // is already present ([_playCurrent] checks the local file
-    // first); the background prefetch warms the cache while the
-    // page plays, so replays and offline benefit. The surah
-    // scope is the exception: it still downloads first (the
-    // user's order — «خلي الصورة اذا بدنا نحملها»). There is NO
-    // whole-surah ZIP in the playback path.
+    // v13.22 — SurahApp way (the user's order, 2026-11-20: «نفس
+    // طريقة صورة»): tapping play on a page downloads that page's
+    // surah FIRST, then plays it from the phone — no internet per
+    // ayah, no gap between ayahs. This supersedes the v13.17
+    // direct-stream order for the PAGE scope only: the word and
+    // single-ayah scopes still stream directly, and the surah
+    // scope was already download-first. The download reuses the
+    // existing [downloadSurahs] (whole-surah ZIP, resume-friendly,
+    // stall timeout only — weakest-net rule, no wall-clock limit);
+    // a failed download falls back to the existing streaming path
+    // in [_playCurrent], so playback still works. The existing
+    // spinner ([isLoading]) shows while the surah downloads — no
+    // download progress or percentage is ever shown in the player
+    // sheet (his order «ما يبين التحميل أبداً»).
+    final token = _playToken;
+    final myQueue = queue;
+    isLoading = true;
+    notifyListeners();
+    // Stop the old audio at once: without this, the old ayah
+    // finishing during the download wait fires a stale finish
+    // that advances the JUST-REPLACED queue and starts the new
+    // page by streaming before the download is done.
+    try {
+      await _player.stop();
+    } catch (_) {}
+    await _ensurePageSurahsDownloaded();
+    // A stop, or a newer play that replaced the queue,
+    // invalidates this play: the newer play (or the stop) owns
+    // the spinner now, so return without touching isLoading.
+    if (_disposed ||
+        token != _playToken ||
+        scope != PlayerScope.page ||
+        !identical(queue, myQueue)) {
+      return;
+    }
     await _playCurrent();
+  }
+
+  /// v13.22 — makes sure the page's surah(s) are on disk before
+  /// the page plays (SurahApp way). Surahs are taken from the
+  /// page's own ayahs (usually one; two at a boundary page), and
+  /// only the page's ayahs are checked — the download itself
+  /// always fetches the WHOLE surah, so later pages of the same
+  /// surah play instantly too. Never throws: any failure leaves
+  /// playback to the streaming fallback in [_playCurrent].
+  Future<void> _ensurePageSurahsDownloaded() async {
+    final dl = downloads;
+    if (dl == null || queue.isEmpty) return;
+    try {
+      final needed = <int>[];
+      for (final ayah in queue) {
+        if (!needed.contains(ayah.$1)) needed.add(ayah.$1);
+      }
+      final missing = needed.where((surah) {
+        return queue.any((a) =>
+            a.$1 == surah &&
+            dl.localAyahFile(reciter, a.$1, a.$2) == null);
+      }).toList(growable: false);
+      if (missing.isEmpty) return;
+      // A download is already running: join it ONLY when it is
+      // for this reciter and covers every missing surah — never
+      // start a duplicate. Any other running job (another
+      // reciter, other surahs, e.g. a full-Mushaf download) is
+      // left alone; playback falls back to streaming in
+      // [_playCurrent] instead of waiting on it.
+      final running = dl.activeJob;
+      if (running != null && running.isDownloading) {
+        if (running.reciterIndex == reciterIndex &&
+            missing.every((s) => running.surahs.contains(s))) {
+          await dl.waitForCurrentJob();
+        }
+        return;
+      }
+      // No job running: start one for the missing surahs and wait
+      // for it. downloadSurahs returns false only when a job
+      // started in between — then re-check the running job.
+      final started = await dl.downloadSurahs(reciterIndex, missing);
+      if (started) {
+        await dl.waitForCurrentJob();
+      } else {
+        final raced = dl.activeJob;
+        if (raced != null &&
+            raced.isDownloading &&
+            raced.reciterIndex == reciterIndex &&
+            missing.every((s) => raced.surahs.contains(s))) {
+          await dl.waitForCurrentJob();
+        }
+      }
+    } catch (_) {}
   }
 
   Future<void> playSurah(int surah) async {
@@ -948,12 +1022,12 @@ class AudioPlayerController extends ChangeNotifier {
       if (scope == PlayerScope.word) {
         await _playWordCurrent(token, ayah);
       } else {
-        // v13.17 — STREAM DIRECTLY for the word / ayah / page
-        // scopes (the user's order, 2026-11-19: «خلي الكلمة
-        // والاية والصفحة خليها دغري يجيبها من النت»): the ayah
-        // comes straight from the internet through the native
-        // player — NO foreground Dart download. The local file
-        // is used ONLY when it is already on disk and valid:
+        // v13.17 — STREAM DIRECTLY for the word / ayah scopes
+        // (the user's order, 2026-11-19: «خلي الكلمة والاية
+        // والصفحة خليها دغري يجيبها من النت»): the ayah comes
+        // straight from the internet through the native player
+        // — NO foreground Dart download. The local file is used
+        // ONLY when it is already on disk and valid:
         // [localAyahFile] is a sync check, and the v13.16
         // validation deletes an invalid file on the spot. The
         // surah scope is the exception: it still downloads
@@ -961,7 +1035,11 @@ class AudioPlayerController extends ChangeNotifier {
         // نحملها»), so it keeps the old cache-on-play path
         // below: the file is downloaded once and played from
         // disk after that — clear, pure and complete on a weak
-        // connection, instant on repeat, offline after.
+        // connection, instant on repeat, offline after. v13.22:
+        // the PAGE scope joins the surah scope — [playPages]
+        // downloads the page's surah first, so this local check
+        // normally finds the file; the stream below is only the
+        // fallback when that download failed.
         File? local;
         if (scope == PlayerScope.surah) {
           local = await downloads?.cacheAyahFile(

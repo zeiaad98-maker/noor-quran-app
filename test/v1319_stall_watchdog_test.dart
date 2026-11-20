@@ -337,6 +337,14 @@ void main() {
       return MockClient.streaming((request, _) async {
         requested.add(request.url.toString());
         final url = request.url.toString();
+        // v13.22: the surah ZIP fails fast (404) — same reason
+        // as the v1318 prefetch test: these tests are about
+        // streaming prefetch, and a slow drip of fake bytes
+        // for the ZIP would make the job fill all 286 ayahs
+        // one by one and the test would time out.
+        if (url.endsWith('.zip')) {
+          return http.StreamedResponse(Stream<List<int>>.empty(), 404);
+        }
         Stream<List<int>> chunks() async* {
           await Future<void>.delayed(url.contains('surahpedia')
               ? const Duration(seconds: 20)

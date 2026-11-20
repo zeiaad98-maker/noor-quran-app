@@ -250,11 +250,13 @@ void main() {
       expect(fake.loadCount, loadsBefore + 1);
       expect(fake.loadUris.last,
           'https://resources.surahpedia.com/Hani_Rifai/002006.mp3');
-      // No foreground download ran for the played ayah, and
-      // there is NO whole-surah ZIP in the playback path at all.
+      // v13.22 supersedes the v13.17 "no ZIP" part: page playback
+      // DOES try the surah ZIP first (the download fails here —
+      // www 500s, everything else 404s), then falls back to the
+      // native stream, so the page still plays.
       expect(requested.any((u) => u.contains('002006')), isFalse);
-      expect(requested.any((u) => u.contains('/zips/')), isFalse,
-          reason: 'no ZIP in the playback path (v13.12)');
+      expect(requested.any((u) => u.contains('/zips/')), isTrue,
+          reason: 'v13.22: the surah download is attempted first');
     });
   });
 }

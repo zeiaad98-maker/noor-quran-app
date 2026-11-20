@@ -31,11 +31,15 @@ typedef DownloadCancelCheck = bool Function();
 ///   alternate hosts ([altAyahUrls]), then the bare-HTTPS
 ///   per-ayah file ([everyayahUrl]) last. The per-surah ZIP
 ///   ([everyayahSurahZipUrl] — same host, `.../zips/NNN.zip`) is
-///   the explicit bulk download ONLY (v13.12 — the user's
-///   correction: one page plays by itself, without the whole
-///   surah): it is unzipped into the same per-ayah layout the
-///   player already uses, so one ZIP download caches the whole
-///   surah — but playback never requests it. No new reciters.
+///   the explicit bulk download (v13.12 — the user's correction:
+///   one page plays by itself, without the whole surah): it is
+///   unzipped into the same per-ayah layout the player already
+///   uses, so one ZIP download caches the whole surah. v13.22
+///   (user's order, 2026-11-20: «نفس طريقة صورة»): page playback
+///   DOES trigger this same download now — tapping play on a page
+///   downloads that page's surah first, then plays locally;
+///   streaming stays only as the fallback when the download
+///   fails. No new reciters.
 /// * Resume: downloads are per-SURAH, decided from the files on
 ///   disk — a failed or interrupted job resumes from the next
 ///   missing surah, and files already on disk are never re-fetched
@@ -89,6 +93,14 @@ class AudioDownloadService extends ChangeNotifier {
   /// Kept after it finishes so the UI can show done/failed/cancelled
   /// instead of losing the result.
   DownloadJob? _job;
+
+  /// Job-completion signal (v13.22): created with each job in
+  /// [downloadSurahs] and completed when that job's [_runJob]
+  /// finishes — [waitForCurrentJob] awaits it, so page playback
+  /// can play from the downloaded files instead of streaming.
+  /// Never completed with an error: false means the job did not
+  /// finish successfully (failed / cancelled).
+  Completer<bool>? _jobCompleter;
 
   AudioDownloadService({
     http.Client? client,
@@ -969,6 +981,8 @@ class AudioDownloadService extends ChangeNotifier {
   /// Start downloading [surahs] of the reciter (1–114). Ignored when
   /// another download is already running. Surahs already downloaded
   /// are skipped. Returns false when a job is already running.
+  /// The job's completion can be awaited with [waitForCurrentJob]
+  /// (v13.22 — page playback waits for the surah download).
   Future<bool> downloadSurahs(int reciterIndex, List<int> surahs) async {
     if (_job != null && _job!.isDownloading) return false;
     final reciter = reciters[reciterIndex];
@@ -976,15 +990,38 @@ class AudioDownloadService extends ChangeNotifier {
         .where((s) => !isSurahDownloaded(reciterIndex, s))
         .toList(growable: false);
     if (pending.isEmpty) return true;
-    _job = DownloadJob(
+    final job = DownloadJob(
       reciterIndex: reciterIndex,
       surahs: pending,
       totalFiles:
           pending.fold<int>(0, (sum, s) => sum + quran.getVerseCount(s)),
     );
+    _job = job;
+    // v13.22 — the completer belongs to THIS job (captured in the
+    // closure, never re-read from the field): a later job must not
+    // have its signal completed by this job's finish.
+    final completer = _jobCompleter = Completer<bool>();
     notifyListeners();
-    unawaited(_runJob(reciterIndex, reciter));
+    unawaited(_runJob(reciterIndex, reciter).whenComplete(() {
+      if (!completer.isCompleted) {
+        completer.complete(job.status == DownloadStatus.done);
+      }
+    }));
     return true;
+  }
+
+  /// Waits for the running job (if any) to finish and reports
+  /// whether it completed successfully. Returns false at once
+  /// when no job is running. Never throws.
+  Future<bool> waitForCurrentJob() async {
+    if (!isDownloading) return false;
+    final completer = _jobCompleter;
+    if (completer == null) return false;
+    try {
+      return await completer.future;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Download the FULL Mushaf of the reciter (all 114 surahs).
