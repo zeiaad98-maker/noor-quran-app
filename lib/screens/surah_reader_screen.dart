@@ -19,6 +19,7 @@ import '../main.dart';
 import '../widgets/audio_player_sheet.dart';
 import '../widgets/noor_qcf_page.dart';
 import '../widgets/quran_search_sheet.dart';
+import '../widgets/reader_jump_sheets.dart';
 import '../widgets/surah_name_image.dart';
 import '../widgets/word_card.dart';
 import 'notes_screen.dart';
@@ -272,7 +273,7 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
   }
 
   void _jumpToPage(int page) {
-    if (page < 1 || page > 604) return;
+    if (!isValidMushafPage(page)) return;
     _pageController.jumpToPage(page - 1);
   }
 
@@ -305,6 +306,69 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
           Navigator.of(context).pop();
           _jumpToPage(page);
         },
+      ),
+    );
+  }
+
+  /// v13.20 — surah picker (the user asked for SurahApp-style
+  /// navigation inside the reader): tap the surah name in the header
+  /// to pick any of the 114 surahs. The sheet closes and the CURRENT
+  /// reader jumps to that surah's first page — no new screen.
+  void _openSurahPicker() {
+    final isDark = NoorQuranApp.of(context)!.isDarkMode;
+    final pageData = quran.getPageData(_currentPage);
+    final currentSurah =
+        pageData.isNotEmpty ? pageData[0]['surah'] as int : 1;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => FractionallySizedBox(
+        heightFactor: 0.88,
+        child: Container(
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E1F1E) : Colors.white,
+            borderRadius: const BorderRadius.vertical(
+              top: Radius.circular(20),
+            ),
+          ),
+          child: SurahJumpSheet(
+            currentSurah: currentSurah,
+            onSelect: (surah) {
+              Navigator.of(context).pop();
+              _jumpToPage(surahStartPage(surah));
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// v13.20 — page picker: tap the page chip at the bottom to pick
+  /// any of the 604 pages. Same pattern as [_openSurahPicker].
+  void _openPagePicker() {
+    final isDark = NoorQuranApp.of(context)!.isDarkMode;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => FractionallySizedBox(
+        heightFactor: 0.88,
+        child: Container(
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E1F1E) : Colors.white,
+            borderRadius: const BorderRadius.vertical(
+              top: Radius.circular(20),
+            ),
+          ),
+          child: PageJumpSheet(
+            currentPage: _currentPage,
+            onSelect: (page) {
+              Navigator.of(context).pop();
+              _jumpToPage(page);
+            },
+          ),
+        ),
       ),
     );
   }
@@ -719,10 +783,19 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                               Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  SurahNameImage(
-                                    surahNumber: surahNumber,
-                                    height: 24,
-                                    isDark: isDark,
+                                  // v13.20: tap the surah name to pick
+                                  // any surah and jump to it (inside
+                                  // this reader — no new screen).
+                                  Tooltip(
+                                    message: 'اختر السورة',
+                                    child: GestureDetector(
+                                      onTap: _openSurahPicker,
+                                      child: SurahNameImage(
+                                        surahNumber: surahNumber,
+                                        height: 24,
+                                        isDark: isDark,
+                                      ),
+                                    ),
                                   ),
                                   const SizedBox(width: 6),
                                   Text(
@@ -805,16 +878,36 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                             },
                           ),
                         ),
+                        // v13.20: the page number is a tappable chip —
+                        // tap it to pick any of the 604 pages (the top
+                        // row is too crowded for another chip, so the
+                        // chip lives here where the number already was).
                         Padding(
                           padding: const EdgeInsets.only(bottom: 6, top: 4),
-                          child: Text(
-                            '$_currentPage'.replaceAllMapped(
-                              RegExp(r'\d'),
-                              (m) => '٠١٢٣٤٥٦٧٨٩'[int.parse(m[0]!)],
-                            ),
-                            style: GoogleFonts.amiri(
-                              fontSize: 17.5,
-                              color: goldColor,
+                          child: Tooltip(
+                            message: 'اختر الصفحة',
+                            child: InkWell(
+                              onTap: _openPagePicker,
+                              borderRadius: BorderRadius.circular(20),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: goldColor.withValues(alpha: 0.6),
+                                  ),
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: Text(
+                                  'صفحة ${arabicDigits(_currentPage)}',
+                                  style: GoogleFonts.amiri(
+                                    fontSize: 17.5,
+                                    color: goldColor,
+                                  ),
+                                ),
+                              ),
                             ),
                           ),
                         ),
@@ -866,10 +959,18 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                           Expanded(
                             child: Column(
                               children: [
-                                SurahNameImage(
-                                  surahNumber: surahNumber,
-                                  height: 26,
-                                  isDark: isDark,
+                                // v13.20: same surah picker as the
+                                // in-flow header row above.
+                                Tooltip(
+                                  message: 'اختر السورة',
+                                  child: GestureDetector(
+                                    onTap: _openSurahPicker,
+                                    child: SurahNameImage(
+                                      surahNumber: surahNumber,
+                                      height: 26,
+                                      isDark: isDark,
+                                    ),
+                                  ),
                                 ),
                                 Text(
                                   '$juzName • ${quran.getVerseCount(surahNumber)} آية • الصفحة $_currentPage من 604',
