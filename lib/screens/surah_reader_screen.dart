@@ -792,8 +792,14 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                                       onTap: _openSurahPicker,
                                       child: SurahNameImage(
                                         surahNumber: surahNumber,
-                                        height: 24,
+                                        height: 32,
                                         isDark: isDark,
+                                        // v13.21: crop the transparent
+                                        // padding so the calligraphy
+                                        // itself is visibly bigger (the
+                                        // user asked for a bigger, more
+                                        // obvious tap target).
+                                        cropPadding: true,
                                       ),
                                     ),
                                   ),
@@ -967,8 +973,11 @@ class _SurahReaderScreenState extends State<SurahReaderScreen> {
                                     onTap: _openSurahPicker,
                                     child: SurahNameImage(
                                       surahNumber: surahNumber,
-                                      height: 26,
+                                      height: 32,
                                       isDark: isDark,
+                                      // v13.21: same bigger, cropped
+                                      // tap target as the header row.
+                                      cropPadding: true,
                                     ),
                                   ),
                                 ),
