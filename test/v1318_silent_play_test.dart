@@ -350,6 +350,18 @@ void main() {
           await buildService((requested) => MockClient.streaming(
                 (request, _) async {
                   requested.add(request.url.toString());
+                  // v13.22: page playback downloads the surah ZIP
+                  // first — this test is about STREAMING prefetch,
+                  // so the ZIP fails fast (404) and playback falls
+                  // back to streaming. The mock must NOT drip its
+                  // slow fake bytes for the ZIP: a "downloaded"
+                  // corrupt ZIP extracts to nothing and the job
+                  // would then fill all 286 ayahs one by one
+                  // (~2 s each) — the test would time out.
+                  if (request.url.path.endsWith('.zip')) {
+                    return http.StreamedResponse(
+                        Stream<List<int>>.empty(), 404);
+                  }
                   Stream<List<int>> chunks() async* {
                     const chunk = 1024;
                     for (var i = 0; i < slowBytes.length; i += chunk) {

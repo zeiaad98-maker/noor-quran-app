@@ -413,8 +413,11 @@ void main() {
           'https://resources.surahpedia.com/Husary/002001.mp3');
       expect(requested.any((u) => u.contains('002001')), isFalse,
           reason: 'no foreground download for the played ayah');
-      // No whole-surah ZIP anywhere in the playback path.
-      expect(requested.any((u) => u.contains('/zips/')), isFalse);
+      // v13.22: the surah ZIP IS attempted first (the mock throws
+      // for '.zip' URLs, so the download fails and playback falls
+      // back to the stream) — the v13.17 "no ZIP in the playback
+      // path" order is superseded for the page scope.
+      expect(requested.any((u) => u.contains('/zips/')), isTrue);
       // Let the next-ayah prefetch settle before teardown deletes
       // the temp dir.
       await Future<void>.delayed(const Duration(milliseconds: 200));

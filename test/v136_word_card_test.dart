@@ -112,7 +112,19 @@ void main() {
 
     Future<AudioPlayerController> makeController() async {
       final tempDir = await Directory.systemTemp.createTemp('v136-ctrl');
-      addTearDown(() => tempDir.delete(recursive: true));
+      // The controller prefetches the next ayahs in the background
+      // (unawaited); under full-suite load a prefetch can still be
+      // writing a file when teardown deletes this dir, and the
+      // delete then throws "Directory not empty" — a teardown
+      // race, not a playback failure. Let the prefetch settle
+      // first (the mock answers instantly), and tolerate the
+      // residual race: the dir is throwaway system-temp.
+      addTearDown(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        try {
+          await tempDir.delete(recursive: true);
+        } catch (_) {}
+      });
       final downloads = AudioDownloadService(
         client: MockClient((_) async => http.Response.bytes(fakeMp3Bytes(), 200)),
         storageDir: tempDir,
